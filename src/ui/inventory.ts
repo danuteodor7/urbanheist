@@ -108,8 +108,13 @@ export function distribute(defs: Map<string, Def>, uid: string, items: Item[], b
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const K = C / 34;   // pozitiile sloturilor au fost desenate pentru celula de 34px
-const SLOT_POS: Record<string, string> = Object.fromEntries(Object.entries({ head: [76, 6], body: [58, 86], weapon: [4, 210], back: [166, 86] }).map(([k, [l, t]]) => [k, `left:${l * K}px;top:${t * K}px`]));
+
+// Panoul de echipament: pozitii in pixeli, calculate ca slot-urile sa nu se suprapuna niciodata
+// (casca 2x2 + vesta 3x3 in stanga, rucsac 4x4 in dreapta, arma 6x2 jos; +2 px de bordura la fiecare)
+const EQ_W = 284, EQ_H = 300;
+const SLOT_POS: Record<string, string> = Object.fromEntries(
+  Object.entries({ head: [19, 0], body: [0, 90], back: [128, 0], weapon: [25, 220] }).map(([k, [l, t]]) => [k, `left:${l}px;top:${t}px`]),
+);
 
 // Iconite simple (24x24) dupa tipul itemului; culoarea vine din raritate (currentColor)
 const ICONS: Record<string, string> = {
@@ -166,18 +171,26 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
       ${hid ? '<span class="q">?</span>' : `${iconOf(def)}${named ? `<span class="nm">${esc(def.name)}</span>` : ''}${it.qty > 1 ? `<b>${it.qty}</b>` : ''}`}</div>`;
   };
   const boxHtml = (b: Box) => {
-    if (b.grow) b.h = Math.max(b.h, ...b.items.map((it) => it.y + size(defs, it)[1] + (b.id === 'stash' ? 1 : 0)));
+    // grila cu `grow` (container, sau stash-ul cand are iteme peste capacitate) se mareste exact cat are nevoie, fara rand in plus
+    if (b.grow) b.h = Math.max(b.h, ...b.items.map((it) => it.y + size(defs, it)[1]));
     const empty = b.slot && !b.items.length ? `<i>${esc(b.title)}${b.slot === 'weapon' ? '<br>(pistol implicit)' : ''}</i>` : '';
     return `<div class="box${b.slot ? ' slot' : ''}" data-box="${b.id}" style="width:${b.w * C}px;height:${b.h * C}px${b.slot ? ';' + SLOT_POS[b.slot] : ''}">${b.items.map((it) => itemHtml(b, it)).join('')}${empty}</div>`;
   };
 
   const render = () => {
+    // pastram scroll-ul paginii si al gridului: innerHTML prabuseste inaltimea si altfel pagina sare sus la fiecare mutare
+    const sy = window.scrollY, sx = window.scrollX;
+    const sc0 = root.querySelector<HTMLElement>('.sc')?.scrollTop ?? 0;
+    if (root.offsetHeight) root.style.minHeight = `${root.offsetHeight}px`;
     root.innerHTML = `<div class="inv">
       ${left ? `<div class="pn"><h4>${esc(left.title)}</h4><div class="sc">${boxHtml(left)}</div></div>` : ''}
-      <div class="pn"><h4>Echipament</h4><div class="ch" style="width:${304 * K}px;height:${300 * K}px">
-        <svg viewBox="0 0 224 300" style="width:${224 * K}px;height:${300 * K}px"><g fill="#2a2d36"><circle cx="112" cy="38" r="24"/><rect x="66" y="68" width="92" height="124" rx="22"/><rect x="76" y="188" width="30" height="100" rx="8"/><rect x="118" y="188" width="30" height="100" rx="8"/></g></svg>
+      <div class="pn"><h4>Echipament</h4><div class="ch" style="width:${EQ_W}px;height:${EQ_H}px">
         ${slots.map(boxHtml).join('')}</div></div>
       <div class="pn"><h4>${esc(bag.title)}</h4>${boxHtml(bag)}</div></div>`;
+    const sc = root.querySelector<HTMLElement>('.sc');
+    if (sc) sc.scrollTop = sc0;
+    window.scrollTo(sx, sy);
+    root.style.minHeight = '';
   };
 
   const sizeGhost = (d: Drag) => {

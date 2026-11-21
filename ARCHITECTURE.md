@@ -23,15 +23,16 @@ npm run build        # genereaza dist/, se urca pe Netlify (drag & drop sau CLI)
 
 ## Structura proiectului
 ```
-index.html, package.json, vite.config.ts, tsconfig.json, .env.local
+index.html (link catre fonturile Barlow + Barlow Condensed), package.json, vite.config.ts, tsconfig.json, .env.local
 supabase/schema.sql      tabele, RLS, RPC (baza)
 supabase/shop.sql        spend_money + rucsacurile in item_defs (de rulat o data)
 src/
   main.ts                auth, Hub (stash + loadout), pornire raid
-  style.css              tema + overlay inventar + overlay magazin
+  style.css              toata tema (tokeni, butoane, hub, inventar, tooltip, magazin, pop-up, HUD din raid)
   lib/supabase.ts        client supabase-js
   net/realtime.ts        clasa Net (canal Broadcast), peekCount, tipurile mesajelor, constante de buget
-  ui/inventory.ts        grile drag&drop (stash, inventar, container, sloturi), rucsac, quickEquip, layout in localStorage
+  ui/inventory.ts        grile drag&drop (stash, inventar, container, sloturi), aruncare pe jos, iconite, tooltip, rucsac, quickEquip, layout in localStorage
+  ui/modal.ts            pop-up-uri in joc: confirmBox / infoBox (nu se mai foloseste NICIODATA window.confirm / alert / prompt)
   game/map.ts            generator determinist de harta + loot + magazine (seed = codul sesiunii)
   game/map.check.ts      test pe 305 seed-uri (BFS accesibilitate, magazine, vehicule, loot)
   game/items.ts          catalog arme/armuri/heal/chei/rucsacuri, infer() pentru itemele necunoscute, tip()
@@ -59,12 +60,14 @@ Starea SQL aplicata de utilizator: `spend_money` si cele 4 rucsacuri (`backpack_
 
 ## Fluxul jocului
 1. **Auth** (`showAuth`): email + parola, username la Register.
-2. **Hub** (`showHub`): stash (grila 10x8 cu `grow`) + loadout (Inventar + sloturi Casca/Vesta/Arma/Rucsac). Pozitiile itemelor se tin in localStorage (`uh:layout:<uid>`), DB nu stie de grid. V peste item din stash = vinde. Buton "INTRA PE SERVER": `peekCount` (refuza la >= 15), `create_raid` > `join_raid` (itemele din loadout) > `start_raid`.
+2. **Hub** (`showHub`): stash + loadout (Inventar + sloturi Casca/Vesta/Arma/Rucsac). **Stash-ul are dimensiune fixa:** 10 coloane x `max(8, ceil(stash_slots / 10))` randuri (pus in `main.ts`; nu are `grow`, deci nu mai creste cand pui un item pe ultimul rand; "Upgrade stash" = +10 sloturi = +1 rand cand trece de 8 randuri). Singura exceptie: itemele care nu mai incap (ex. dupa schimbarea formulei) fac stash-ul sa creasca temporar (`grow` setat de `distribute` / de mutarea de dupa raid), ca sa nu dispara din vedere. Pozitiile itemelor se tin in localStorage (`uh:layout:<uid>`), DB nu stie de grid. V peste item din stash = vinde. Buton "INTRA PE SERVER": `peekCount` (refuza la >= 15), `create_raid` > `join_raid` (itemele din loadout) > `start_raid`.
+   - **Dupa raid** (extractie / moarte / abandon fara eroare de retea): `clearLoadout` sterge pozitiile din loadout si flagul `afterRaid` face ca la urmatorul `showHub` tot ce e in Inventar / Echipament sa fie mutat automat in stash (`autoPlace`), apoi `refit` si `save`. Utilizatorul nu mai muta nimic manual.
+   - **Layout hub:** `.hub` are `max-width: 1560px` ca Stash + Echipament + Inventar (pana la 12x9 cu rucsacul militar) sa incapa pe un singur rand; pe ecrane mai inguste panourile trec pe randul urmator (`flex-wrap`).
 3. **Raid** (`runRaid` > `RaidScene`): un singur server comun, canal `raid:main`, aceeasi harta (`generateMap('main')`). Fiecare jucator are propriul raid pe server (validare extractie/moarte).
-4. **Final:** extractie (5 s in zona verde, dupa 60 s de la intrare) trimite loot-ul *gasit* (`found: true`) + xp; moarte/abandon (Q) lasa un drop cu tot ce ai asupra ta; `die_in_raid` sterge itemele aduse. La final se revine in hub cu un mesaj (`note`).
+4. **Final:** extractia (5 s in zona verde, dupa 60 s de la intrare) trimite loot-ul *gasit* (`found: true`) + xp; moarte/abandon (Q) lasa un drop cu tot ce ai asupra ta; `die_in_raid` sterge itemele aduse. La final se revine in hub cu un mesaj (`note`).
 5. Daca iesirea esueaza din retea: ecran de recuperare (reintra / abandoneaza), `raidBad`.
 
-**Controale:** WASD miscare, mouse tinta + click foc, R reload, E interactiune (container / usa / magazin / masina), Tab sau I inventar, H heal rapid, Q abandon, Esc inchide overlay. Clic dreapta in inventar: echipeaza / ia / foloseste. R in timpul drag: roteste itemul.
+**Controale:** WASD miscare, mouse tinta + click foc, R reload, E interactiune (container / usa / magazin / masina), Tab sau I inventar, H heal rapid, Q abandon, Esc inchide overlay. Clic dreapta in inventar: echipeaza / ia / foloseste. R in timpul drag: roteste itemul. **Drag intre inventar si container (in ambele sensuri)** muta itemul; **drag in afara oricarui panou** il arunca pe jos.
 
 ## Harta (`map.ts`)
 - **64 -> 104x72 tiles** (`W=104, H=72, NX=12, NY=8`), tile 32 px. Grila 12x8 de celule 8x8 (continut 6x6, strazi de 2 tiles la x/y = 11+8k si 12+8k, cu linie intrerupta ca decor).
@@ -85,10 +88,18 @@ Starea SQL aplicata de utilizator: `spend_money` si cele 4 rucsacuri (`backpack_
 
 ## Inventar si rucsacuri (`ui/inventory.ts`, `items.ts`)
 - `Box` = grila (stash, inventar, container) sau slot (un item, `slot` = ce accepta). `mkBoxes()` da: `bag` (Inventar), `head`, `body`, `weapon`, `back` (Rucsac).
+- **Panoul Echipament:** fara silueta; sloturile sunt placi metalice (`.box.slot`, colturi galbene, eticheta discreta) asezate cu pozitii in pixeli (`SLOT_POS`, `EQ_W=284`, `EQ_H=300` in inventory.ts) astfel incat sa nu se suprapuna: casca 2x2 sus-stanga, vesta 3x3 sub ea, rucsac 4x4 in dreapta, arma 6x2 jos pe toata latimea (cu 2 px de bordura la fiecare slot). Daca se schimba dimensiunea unui slot in `mkBoxes`, recalculeaza `SLOT_POS`.
+- **Randare fara salt de scroll:** `render()` din `mountInventory` inlocuieste tot `innerHTML`; ca pagina sa nu sara sus la fiecare mutare, salveaza `scrollX/Y` si `scrollTop`-ul gridului `.sc`, fixeaza temporar `min-height` pe radacina si le restaureaza dupa. Orice randare noua trebuie sa pastreze aceasta schema.
+- **Grile `grow`:** `boxHtml` mareste gridul exact cat cer itemele (fara rand in plus). Folosit de container si, rar, de stash (iteme peste capacitate).
 - **Rucsac:** slot `back`; inventarul de baza (`BASE_BAG`) e **6x4**, cu rucsac devine: small 7x5, medium 8x7, large 10x8, military 12x9 (`Spec.pack`). Rucsacurile necunoscute din DB se deduc dupa raritate (`PACKS` in items.ts). Se gasesc in loot dupa raritate (uncommon..legendary) si se cumpara (nu cel militar).
 - `refit(defs, bag, back)` redimensioneaza gridul; daca itemele nu mai incap (nici reasezate automat), mutarea/echiparea se **anuleaza** (snapshot/restore, `Hooks.refit/onDeny`). `distribute()` pune rucsacurile primele, ca restul itemelor sa incapa.
 - Itemele aduse din stash sunt `found` nedefinit (raman la risc, scazute prin `consume_raid_item`); cele luate din raid au `found: true` si se salveaza la extractie. Stack max `MAX_STACK = 50`.
-- Container deschis: itemele se identifica pe rand (`search_time_ms`), clic dreapta / drag le ia (`commitTake`, `looted` broadcast). Cadavrele/drop-urile sunt instant revelate.
+- Container deschis: itemele se identifica pe rand (`search_time_ms`), clic dreapta / drag le ia (`commitTake`, `looted` broadcast). Cadavrele/drop-urile sunt instant revelate. Si containerele goale se pot deschide (ca sa lasi iteme in ele).
+- **Depunere in container (fix):** gridul containerului nu mai e `readonly`. Drag din inventar in container: `onMove` accepta, iar efectele ruleaza dupa `refit` in `Hooks.afterMove` -> `commitPut` (loot nou in `c.items`, marcat deja identificat, mesaj Broadcast `put`).
+- **Aruncare pe jos (fix):** `Hooks.ground = true` (doar in raid; in hub nu) => drag in afara panourilor `.pn` apeleaza `onMove(it, from, null)` si apoi `afterMove(it, from, null)` -> `throwItem`. Daca exista deja un drop la <30 px, itemul se adauga acolo (`put`), altfel se creeaza un drop nou (`drop`, forma `DeadMsg`, fara cadavru). Din container nu se arunca direct (se ia mai intai in inventar).
+- **Ordinea efectelor:** `inventory.ts > up()` face intai mutarea + `refit` (cu snapshot/restore); abia dupa ce reuseste se apeleaza `afterMove`. Astfel un refuz de refit nu lasa loot fantoma / mesaje de retea.
+- **Itemele aduse din stash** (`found` nedefinit) care ajung in container / pe jos se scad din DB cu `consume_raid_item` (`RaidScene.release`); daca le iei inapoi devin `found: true` si se salveaza la extractie. Fara asta un item aruncat si ridicat de altcineva ar fi existat de doua ori.
+- Iconitele itemelor sunt SVG inline (`ICONS` in inventory.ts, alese dupa `spec()`); numele apare in celula doar daca itemul are cel putin 2 celule. Tooltip-ul e propriu (`showTip`/`tipHtml`), nu atributul `title`.
 
 ## Itemi, arme, combat (`items.ts`, `RaidScene.ts`)
 - `CATALOG` cunoaste: revolver, smg, shotgun, rifle, sniper, casti/veste, bandage/medkit/stim, chei (`Depozit`, `Banca`, `Casa`), 4 rucsacuri. `registerDefs()` deduce restul din nume/raritate (`infer`). Pistolul implicit nu e in DB (gloante infinite). Arma are `mag`, `reload`, `ammo` (tip item gloante), sniper are `range/fov` (camera se muta spre mouse).
@@ -96,13 +107,15 @@ Starea SQL aplicata de utilizator: `spend_money` si cele 4 rucsacuri (`backpack_
 - **Heal:** clic dreapta / H, intrerupt la lovitura. **Masini:** `E` (hotwire 1.5 s), W/S gaz-frana, A/D directie, lovesc jucatorii (victim-authoritative). **Usi incuiate:** necesita cheia potrivita in inventar (consumata).
 
 ## Multiplayer (`net/realtime.ts`)
-Mesaje Broadcast: `pos` (dead reckoning: doar la schimbare de viteza + corectie rara, heartbeat 4 s, stale 12 s), `shot`, `dead` (drop cu `did` unic), `looted` (comutativ), `gone`, `alarm`, `door`, `car`, `hello`/`state` (jucator care intra tarziu primeste containerele modificate, drop-urile, usile, masinile), `probe`/`alive` (capacitate). Fara Presence.
+Mesaje Broadcast: `pos` (dead reckoning: doar la schimbare de viteza + corectie rara, heartbeat 4 s, stale 12 s), `shot`, `dead` (drop cu `did` unic), `looted` (comutativ), `put` (iteme puse intr-un container / drop: `{k, added[]}`), `drop` (item aruncat pe jos, aceeasi forma ca `dead`, creeaza doar containerul), `gone`, `alarm`, `door`, `car`, `hello`/`state` (jucator care intra tarziu primeste containerele modificate, drop-urile, usile, masinile; starea unui container atins inlocuieste lista locala, nu doar scade din ea, ca sa includa si itemele depuse), `probe`/`alive` (capacitate). Fara Presence.
 - **Boti:** simulati doar de host = cel mai mic id (`electHost`, la 1 s), `BOT_COUNT = 8`, patrulare/urmarire/foc cu acelasi raycast de vedere, respawn 30 s, drop la moarte, id `bot:<host>:<n>`, trimisi ca `pos`. Fara pathfinding (se pot bloca). **Alarma:** cine ia un item `legendary` trimite `alarm`, botii din 800 px vin 20 s.
 - **Buget:** `MSG_BUDGET = 70`; rata corectiilor `pos` scade cu n^2. Optiuni daca trebuie 15 jucatori: Supabase Pro, server WebSocket separat doar pentru pozitii, interest management pe zone.
 
 ## Randare, vizibilitate, UI (`RaidScene.ts`)
 - **Ecran complet:** containerul `#game` e `position: fixed; inset: 0`; Phaser `Scale.RESIZE` (fara bare negre). Elementele fixe pe ecran se repozitioneaza in `layout()` (apelat la `scale 'resize'`): vigneta, bara de viata, textul arma/gloante/bani, mesajele, minimap.
-- **UI:** doar bara de viata + o linie "arma mag/rezerva + $bani" jos stanga, mesaje jos centru, minimap dreapta sus (2 px/tile). HUD-ul text din stanga sus (hp, zona, jucatori, controale) a fost scos intentionat.
+- **UI (HTML, nu Phaser):** HUD-ul din raid e un `div.hud` adaugat peste canvas (`buildHud` / `updateHud`, recalculat doar cand se schimba ceva): panou jos stanga cu arma, incarcator mare (rosu cand e pe terminate), rezerva, bara de viata segmentata, armura si bani; flash rosu la lovitura (`hud.hit`). Mesajele sunt toast-uri HTML (`say()`, max 4, dispar dupa ~3.5 s). Minimap-ul ramane desenat in Phaser (dreapta sus, 2 px/tile, cu rama galbena). HUD-ul text din stanga sus (hp, zona, jucatori, controale) a fost scos intentionat.
+- **Pop-up-uri in joc:** `ui/modal.ts` (`confirmBox`, `infoBox`) inlocuiesc complet `window.confirm`. Cat timp un pop-up e deschis, tastele `keydown` sunt interceptate (doar keydown, ca `keyup` sa ajunga la Phaser) si `RaidScene.modal` blocheaza miscarea, focul si tastele E/H/R/Q (consumate cu `JustDown`, ca sa nu se declanseze dupa inchidere). Pentru actiuni periculoase (abandon, vanzare, extragere fara loot) butonul implicit e "Anuleaza". Folosit la: vanzare (V in hub), abandon (Q in raid si in ecranul de recuperare), extragere fara loot si raportul de dupa raid (extractie reusita / raid incheiat).
+- **Tema vizuala:** tokeni in `:root` din `style.css` (asfalt `--ink`, otel `--steel/--plate`, accent unic galben de santier `--amber`, bani `--cash`); semnul distinctiv e banda de avertizare (`--tape`) pe bara de sus, cardul de login, butonul "Intra pe server" si pop-up-uri. Fonturi: Barlow Condensed (titluri, cifre) + Barlow (text). Butoanele au colturi taiate (`--chamfer`); culorile raritatii sunt variabila `--rc` (`.r-*` / `.sr-*`). Respecta `prefers-reduced-motion`. Orice culoare noua se pune ca token, nu hardcodata.
 - **Vizibilitate:** `vision()` = 180 de raze, con 110 grade spre mouse (raza 420) + cerc 90 px; intunericul se deseneaza ca triunghiuri (FOG_R 1800), fara masti. `see(x,y)` ascunde jucatori/gloante/containere/masini din afara conului. Containerele si magazinele vazute o data raman afisate.
 - Texturi 100% din cod (`art.ts`); ~7.5k tile-uri imagine pe harta (daca scade FPS: pre-randare in RenderTexture).
 
@@ -112,15 +125,19 @@ Mesaje Broadcast: `pos` (dead reckoning: doar la schimbare de viteza + corectie 
 - Abandonul lasa un drop cu tot rucsacul (poate fi folosit ca transfer de iteme intre prieteni).
 - Loot-ul gasit exista doar in memoria clientului; refresh in raid il pierde. Tab inchis fara extractie = ramai in `raid_players`, reintri in raid.
 - `spend_money` valideaza doar suma si faptul ca esti in raid (itemul cumparat nu e verificat server-side).
+- Itemele puse intr-un container al hartii dispar la urmatorul reset de loot (`rerollLoot` rescrie `c.items`); doar drop-urile (aruncate / de la cadavre) raman. Itemele depuse de altii apar la ceilalti ca "?" (nerevelate) in containerele hartii.
+- Aruncarea poate fi folosita ca transfer de iteme intre prieteni (ca abandonul); itemele aduse din stash se scad din DB la aruncare / depunere.
 - Gloantele trec peste apa, dar sunt oprite de gard/masini/rafturi/pompe (`isShot` vs `isWall`).
+- Limita stash-ului din UI (randuri = `stash_slots / 10`) e doar vizuala; server-side `stash_slots` ramane numarul maxim de iteme (nu de celule), deci un stash plin vizual poate avea inca loc pe server si invers.
 
 ## Probleme deschise
 1. **"loot exceeds limit" la extractie:** verificarea sta in functia SQL `extract_player` (cod necunoscut documentului). Utilizatorul vrea s-o scoata. Pas: ruleaza `select pg_get_functiondef('public.extract_player'::regproc);`, scoate blocul `raise exception ... exceeds/limit` (si limitele pe raritate / xp / stack) si re-creeaza functia. Pana atunci clientul trimite stack-urile in bucati de max 50 si, daca serverul refuza, ofera iesire doar cu itemele aduse. Constantele `MAX_XP`, `MAX_STACK` din RaidScene oglindesc SQL: schimba-le impreuna.
 2. Magazinele depind de `item_defs`: daca lipsesc arme/gloante (`ammo_*`)/heal/armuri in DB, magazinul respectiv apare gol.
-3. Neverificat in browser de AI-ul care a scris ultima versiune: ecranul complet, overlay-ul de magazin, rucsacurile in raid cu 2+ jucatori.
+3. Neverificat in browser de AI-ul care a scris ultima versiune: ecranul complet, overlay-ul de magazin, rucsacurile in raid cu 2+ jucatori, **depunerea / aruncarea itemelor si noul HUD / tema** (doar `tsc`, `map.check` si `vite build` au rulat). De testat: depui un item in container si il ia al doilea jucator; arunci un item adus din stash (verifica ca dispare din stash dupa extractie); Enter / Esc / Tab in pop-up nu misca jucatorul.
+4. **Nou, neverificat in browser (doar scris, nici `tsc` nu a rulat):** panoul Echipament refacut (fara suprapunere rucsac / arma), stash cu dimensiune fixa (nu mai creste pe ultimul rand), pastrarea scroll-ului la mutarea itemelor, `.hub` lat (inventarul cu rucsac mare ramane pe acelasi rand), mutarea automata in stash dupa raid (`afterRaid`). De testat: pui un item pe ultimul rand din stash si nu apare rand nou; muti iteme prin stash fara salt de scroll; echipezi rucsacul militar si Inventarul ramane langa Echipament; dupa extractie / moarte tot ce era in loadout apare in stash. **Neclar:** valoarea initiala `stash_slots` din DB; daca e sub 80, upgrade-ul nu se vede ca rand nou pana trece de 80 (formula `max(8, ceil(stash_slots / 10))` din `main.ts`).
 
 ## Idei urmatoare (Pasul 6)
 Economie extinsa (magazin si in hub), crafting / upgrade Hideout, skill tree, A* pentru boti, zgomot de masini care atrage boti, optimizari de trafic, mutarea starii efemere critice pe server daca jocul devine public.
 
 ## Conventii de cod
-TypeScript strict; comentarii si UI in romana; fara framework UI (HTML prin template strings, `esc()` pe orice text extern); `showHub()` re-randeaza tot (mesaje prin `note`); orice schimbare de schema se scrie in `supabase/*.sql` si se ruleaza manual in SQL Editor; harta si loot trebuie sa ramana deterministe (acelasi seed => aceeasi harta la toti jucatorii).
+TypeScript strict; comentarii si UI in romana; fara framework UI (HTML prin template strings, `esc()` pe orice text extern); `showHub()` re-randeaza tot (mesaje prin `note`; confirmarile prin `ui/modal.ts`, niciodata dialoguri native); orice schimbare de schema se scrie in `supabase/*.sql` si se ruleaza manual in SQL Editor; harta si loot trebuie sa ramana deterministe (acelasi seed => aceeasi harta la toti jucatorii).

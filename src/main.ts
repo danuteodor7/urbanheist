@@ -10,6 +10,7 @@ import {
   distribute,
   quickEquip,
   refit,
+  autoPlace,
   type Box,
 } from "./ui/inventory";
 import { registerDefs, type Def, type Item } from "./game/items.ts";
@@ -31,6 +32,7 @@ let uid: string | null = null;
 let note = ""; // mesaj afisat dupa urmatorul render
 let teardown: (() => void) | null = null; // curata inventarul + listener-ele hub-ului inainte de re-render
 let raidBad = false; // iesirea din raid a esuat (retea): aratam ecranul de recuperare, nu re-intram in bucla
+let afterRaid = false; // raidul tocmai s-a terminat: la urmatorul hub tot ce e in inventar / echipament se muta in stash
 let lastErr = "";
 
 const msg = (t: string) => {
@@ -153,7 +155,10 @@ async function showHub() {
       (n, failed) => {
         note = n;
         if (failed) raidBad = true;
-        else clearLoadout(uid!);
+        else {
+          clearLoadout(uid!);
+          afterRaid = true; // la urmatorul hub, inventarul si echipamentul se muta automat in stash
+        }
         showHub();
         if (!failed) {
           // la eroare de retea ecranul de recuperare arata deja mesajul
@@ -222,15 +227,15 @@ async function showHub() {
     (r) => !r.raid_id && defs.has(r.item_type),
   );
 
-  // Stash (grila mare) + loadout (rucsac + 3 sloturi); pozitiile se tin in localStorage
+  // Stash (grila cu dimensiune FIXA: 10 coloane, un rand la fiecare 10 sloturi, minim 8 randuri) + loadout (rucsac + 3 sloturi);
+  // pozitiile se tin in localStorage. Stash-ul nu mai creste singur cand pui un item pe ultimul rand.
   const B = mkBoxes();
   const stash: Box = {
     id: "stash",
     title: `Stash ${safe.length}/${p.stash_slots}`,
     w: 10,
-    h: 8,
+    h: Math.max(8, Math.ceil(p.stash_slots / 10)),
     items: [],
-    grow: true,
   };
   const list: Item[] = safe.map((r) => ({
     id: String(r.id),
@@ -250,6 +255,23 @@ async function showHub() {
   );
   const save = () =>
     saveLayout(uid!, [stash, B.bag, B.head, B.body, B.weapon, B.back]);
+
+  // Dupa raid: tot ce a ramas in inventar / echipament merge automat in stash (nu mai trebuie mutat de mana)
+  if (afterRaid) {
+    afterRaid = false;
+    for (const b of [B.bag, B.head, B.body, B.weapon, B.back]) {
+      for (const it of [...b.items]) {
+        b.items = b.items.filter((i) => i !== it);
+        if (!autoPlace(defs, stash, it)) {
+          stash.grow = true; // stash plin: nu pierdem itemul din vedere
+          autoPlace(defs, stash, it);
+        }
+      }
+    }
+    refit(defs, B.bag, B.back);
+  }
+  save();
+
   const loadout = () => [
     ...B.bag.items,
     ...B.head.items,
