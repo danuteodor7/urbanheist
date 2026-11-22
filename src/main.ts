@@ -10,10 +10,9 @@ import {
   distribute,
   quickEquip,
   refit,
-  autoPlace,
   type Box,
 } from "./ui/inventory";
-import { registerDefs, type Def, type Item } from "./game/items.ts";
+import { registerDefs, dims, type Def, type Item } from "./game/items.ts";
 import { confirmBox, infoBox } from "./ui/modal.ts";
 
 type Row = {
@@ -23,6 +22,7 @@ type Row = {
   raid_id: string | null;
 };
 
+const STASH_START = 100, STASH_STEP = 50, STASH_MAX = 1500;
 const app = document.getElementById("app")!;
 const $ = (id: string) => document.getElementById(id)!;
 const esc = (s: string) =>
@@ -32,7 +32,6 @@ let uid: string | null = null;
 let note = ""; // mesaj afisat dupa urmatorul render
 let teardown: (() => void) | null = null; // curata inventarul + listener-ele hub-ului inainte de re-render
 let raidBad = false; // iesirea din raid a esuat (retea): aratam ecranul de recuperare, nu re-intram in bucla
-let afterRaid = false; // raidul tocmai s-a terminat: la urmatorul hub tot ce e in inventar / echipament se muta in stash
 let lastErr = "";
 
 const msg = (t: string) => {
@@ -154,11 +153,7 @@ async function showHub() {
       { id: uid!, name: p.username },
       (n, failed) => {
         note = n;
-        if (failed) raidBad = true;
-        else {
-          clearLoadout(uid!);
-          afterRaid = true; // la urmatorul hub, inventarul si echipamentul se muta automat in stash
-        }
+        if (failed) raidBad = true; // dupa raid inventarul si echipamentul raman cum erau; le muti tu in stash
         showHub();
         if (!failed) {
           // la eroare de retea ecranul de recuperare arata deja mesajul
@@ -228,15 +223,18 @@ async function showHub() {
   );
 
   // Stash (grila cu dimensiune FIXA: 10 coloane, un rand la fiecare 10 sloturi, minim 8 randuri) + loadout (rucsac + 3 sloturi);
-  // pozitiile se tin in localStorage. Stash-ul nu mai creste singur cand pui un item pe ultimul rand.
+  // pozitiile se tin in localStorage. Stash-ul nu creste niciodata: itemele care nu incap raman sub grila pana le muti / vinzi.
   const B = mkBoxes();
-  const stash: Box = {
-    id: "stash",
-    title: `Stash ${safe.length}/${p.stash_slots}`,
-    w: 10,
-    h: Math.max(8, Math.ceil(p.stash_slots / 10)),
-    items: [],
-  };
+const slots = Math.min(STASH_MAX, Math.max(STASH_START, p.stash_slots));
+const rows = Math.ceil(slots / 10);
+const stash: Box = {
+  id: "stash",
+  title: `Stash ${safe.length}/${slots}`,
+  w: 10,
+  h: rows,
+  cap: rows,
+  items: [],
+};
   const list: Item[] = safe.map((r) => ({
     id: String(r.id),
     type: r.item_type,
@@ -256,21 +254,14 @@ async function showHub() {
   const save = () =>
     saveLayout(uid!, [stash, B.bag, B.head, B.body, B.weapon, B.back]);
 
-  // Dupa raid: tot ce a ramas in inventar / echipament merge automat in stash (nu mai trebuie mutat de mana)
-  if (afterRaid) {
-    afterRaid = false;
-    for (const b of [B.bag, B.head, B.body, B.weapon, B.back]) {
-      for (const it of [...b.items]) {
-        b.items = b.items.filter((i) => i !== it);
-        if (!autoPlace(defs, stash, it)) {
-          stash.grow = true; // stash plin: nu pierdem itemul din vedere
-          autoPlace(defs, stash, it);
-        }
-      }
-    }
-    refit(defs, B.bag, B.back);
-  }
   save();
+
+  // Itemele care nu au mai incaput in grila stau sub ea (gridul nu creste): avertizam o data
+  const over = stash.items.filter(
+    (i) => i.y + dims(defs.get(i.type)!, i.r)[1] > stash.cap!,
+  ).length;
+  if (over)
+    note += `${note ? " " : ""}${over} ${over === 1 ? "item nu a incaput" : "iteme nu au incaput"} in stash (sunt sub grila): muta-le in inventar sau vinde-le (V).`;
 
   const loadout = () => [
     ...B.bag.items,
@@ -299,8 +290,7 @@ async function showHub() {
       <div id="inv"></div>
     </main>
     <footer class="bar">
-      <button id="up" class="btn">Upgrade stash (+10 sloturi)</button>
-      <p id="msg" class="note">${esc(note)}</p>
+<button id="up" class="btn"${slots >= STASH_MAX ? " disabled" : ""}>Upgrade stash (+${STASH_STEP} sloturi)</button>      <p id="msg" class="note">${esc(note)}</p>
       <button id="go" class="btn primary big">INTRA PE SERVER</button>
     </footer>
   </div>`;
@@ -373,10 +363,11 @@ async function showHub() {
     window.removeEventListener("keydown", onKey);
   };
 
-  $("up").onclick = async () => {
-    const r = await rpc("upgrade_stash");
-    if (r) done("Stash marit.");
-  };
+$("up").onclick = async () => {
+  if (slots >= STASH_MAX) return msg(`Stash-ul e deja la maxim (${STASH_MAX}).`);
+  const r = await rpc("upgrade_stash");
+  if (r) done(`Stash marit (+${STASH_STEP}).`);
+};
   $("go").onclick = async () => {
     const btn = $("go") as HTMLButtonElement;
     if (btn.disabled) return;

@@ -1,7 +1,7 @@
 import { BASE_BAG, dims, spec, tip, type Def, type Item, type Slot } from '../game/items.ts';
 
 // Un Box e fie un grid de celule (stash, rucsac, container), fie un slot de echipament (un singur item, `slot` = ce accepta)
-export type Box = { id: string; title: string; w: number; h: number; items: Item[]; slot?: Slot; grow?: boolean; readonly?: boolean };
+export type Box = { id: string; title: string; w: number; h: number; items: Item[]; slot?: Slot; grow?: boolean; cap?: number; readonly?: boolean };   // cap = cate randuri se pot FOLOSI (stash: mai putine decat se vad, daca au ramas iteme peste limita)
 export type Hooks = {
   defs: Map<string, Def>;
   hidden?: (b: Box, it: Item) => boolean;                        // container: item inca nerevelat
@@ -20,7 +20,7 @@ export const mkBoxes = () => ({
   bag: { id: 'bag', title: 'Inventar', w: BASE_BAG.w, h: BASE_BAG.h, items: [] } as Box,
   back: { id: 'back', title: 'Rucsac', w: 4, h: 4, slot: 'back', items: [] } as Box,
   head: { id: 'head', title: 'Casca', w: 2, h: 2, slot: 'head', items: [] } as Box,
-  body: { id: 'body', title: 'Vesta', w: 3, h: 3, slot: 'body', items: [] } as Box,
+  body: { id: 'body', title: 'Vesta', w: 4, h: 4, slot: 'body', items: [] } as Box,
   weapon: { id: 'weapon', title: 'Arma', w: 6, h: 2, slot: 'weapon', items: [] } as Box,
 });
 
@@ -30,7 +30,7 @@ const size = (defs: Map<string, Def>, it: Item, r = it.r) => dims(defs.get(it.ty
 export function fits(defs: Map<string, Def>, b: Box, it: Item, x: number, y: number, r: boolean): boolean {
   if (b.slot) return spec(it.type)?.slot === b.slot && b.items.every((o) => o === it);
   const [w, h] = dims(defs.get(it.type)!, r);
-  if (x < 0 || y < 0 || x + w > b.w || (!b.grow && y + h > b.h)) return false;
+  if (x < 0 || y < 0 || x + w > b.w || (!b.grow && y + h > (b.cap ?? b.h))) return false;
   return b.items.every((o) => {
     if (o === it) return true;
     const [ow, oh] = size(defs, o);
@@ -40,7 +40,7 @@ export function fits(defs: Map<string, Def>, b: Box, it: Item, x: number, y: num
 
 // Primul loc liber (normal, apoi rotit); itemul trebuie sa nu fie deja in `b`
 export function autoPlace(defs: Map<string, Def>, b: Box, it: Item): boolean {
-  const rows = b.slot ? 1 : b.grow ? 400 : b.h;
+  const rows = b.slot ? 1 : b.grow ? 400 : (b.cap ?? b.h);
   for (let y = 0; y < rows; y++) for (let x = 0; x < (b.slot ? 1 : b.w); x++) for (const r of [false, true]) {
     if (!fits(defs, b, it, x, y, r)) continue;
     Object.assign(it, b.slot ? { x: 0, y: 0, r: false } : { x, y, r });
@@ -94,6 +94,15 @@ export function clearLoadout(uid: string) {
   for (const k of Object.keys(l)) if (l[k].c !== 'stash') delete l[k];
   store(uid, l);
 }
+// Item care nu mai incape in grila: sta sub ea, vizibil, pana il muti / vinzi. Gridul ramane fix: in randurile de sub `cap` nu se poate pune nimic nou.
+export function placeOverflow(defs: Map<string, Def>, b: Box, it: Item): boolean {
+  const cap = b.cap ?? b.h, grow = b.grow;
+  b.cap = undefined; b.grow = true;
+  const ok = autoPlace(defs, b, it);
+  b.grow = grow; b.cap = cap;
+  if (ok) b.h = Math.max(b.h, it.y + size(defs, it)[1]);
+  return ok;
+}
 // Pune fiecare item in cutia salvata; ce nu mai incape sau nu are pozitie merge in `fallback`
 export function distribute(defs: Map<string, Def>, uid: string, items: Item[], boxes: Box[], fallback: Box, after?: () => void) {
   const l = loadLayout(uid);
@@ -102,7 +111,7 @@ export function distribute(defs: Map<string, Def>, uid: string, items: Item[], b
   for (const it of [...items].sort((a, b) => first(a) - first(b))) {
     const s = l[it.id], b = s && boxes.find((x) => x.id === s.c);
     if (b && fits(defs, b, it, s.x, s.y, s.r)) { Object.assign(it, { x: s.x, y: s.y, r: s.r }); b.items.push(it); after?.(); continue; }
-    if (!autoPlace(defs, fallback, it)) { fallback.grow = true; autoPlace(defs, fallback, it); }   // nu pierdem iteme din vedere
+    if (!autoPlace(defs, fallback, it)) placeOverflow(defs, fallback, it);   // nu pierdem iteme din vedere, dar gridul nu creste
     after?.();
   }
 }
@@ -111,9 +120,9 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
 // Panoul de echipament: pozitii in pixeli, calculate ca slot-urile sa nu se suprapuna niciodata
 // (casca 2x2 + vesta 3x3 in stanga, rucsac 4x4 in dreapta, arma 6x2 jos; +2 px de bordura la fiecare)
-const EQ_W = 284, EQ_H = 300;
+const EQ_W = 320, EQ_H = 332;
 const SLOT_POS: Record<string, string> = Object.fromEntries(
-  Object.entries({ head: [19, 0], body: [0, 90], back: [128, 0], weapon: [25, 220] }).map(([k, [l, t]]) => [k, `left:${l}px;top:${t}px`]),
+  Object.entries({ head: [38, 0], body: [0, 88], back: [164, 0], weapon: [45, 252] }).map(([k, [l, t]]) => [k, `left:${l}px;top:${t}px`]),
 );
 
 // Iconite simple (24x24) dupa tipul itemului; culoarea vine din raritate (currentColor)
@@ -167,8 +176,9 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     const hid = hooks.hidden?.(b, it);
     const x = b.slot ? ((b.w - w) * C) / 2 : it.x * C, y = b.slot ? ((b.h - h) * C) / 2 : it.y * C;
     const named = w * h >= 3 || (w >= 2 && h >= 1 && w * h >= 2);
-    return `<div class="it r-${def.rarity}${hid ? ' hid' : ''}" data-it="${esc(it.id)}" data-box="${b.id}" style="left:${x}px;top:${y}px;width:${w * C}px;height:${h * C}px">
-      ${hid ? '<span class="q">?</span>' : `${iconOf(def)}${named ? `<span class="nm">${esc(def.name)}</span>` : ''}${it.qty > 1 ? `<b>${it.qty}</b>` : ''}`}</div>`;
+    // itemele nedeblocate nu poarta clasa de raritate: sunt gri, ca sa nu dea de gol ce sunt
+    return `<div class="it ${hid ? 'hid' : `r-${def.rarity}`}" data-it="${esc(it.id)}" data-box="${b.id}" style="left:${x}px;top:${y}px;width:${w * C}px;height:${h * C}px">
+      ${hid ? '<span class="q">?</span><i class="pg"></i>' : `${iconOf(def)}${named ? `<span class="nm">${esc(def.name)}</span>` : ''}${it.qty > 1 ? `<b>${it.qty}</b>` : ''}`}</div>`;
   };
   const boxHtml = (b: Box) => {
     // grila cu `grow` (container, sau stash-ul cand are iteme peste capacitate) se mareste exact cat are nevoie, fara rand in plus

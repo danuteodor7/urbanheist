@@ -38,6 +38,8 @@ import {
   quickEquip,
   refit,
   iconSvg,
+  snap,
+  restore,
   type Box,
   type Hooks,
 } from "../ui/inventory";
@@ -62,7 +64,8 @@ import {
 const SPEED = 170;
 const REACH = 44; // distanta maxima pana la container / usa (px)
 const EXTRACT_MS = 5000; // cat stai in zona verde ca sa extragi
-// Limite oglindite din extract_player (limitele pe raritate au fost scoase; scoate-le si din SQL)
+const REVEAL_MS = 1000; // cat dureaza deblocarea fiecarui item din container (la fel pentru toate)
+// Limite oglindite din extract_player (limitele pe numar de iteme / raritate au fost scoase din SQL)
 const MAX_XP = 2000,
   MAX_STACK = 50;
 
@@ -71,7 +74,27 @@ const HP_MAX = 100,
   DAMAGE = 20;
 const BULLET_SPEED = 520,
   BULLET_LIFE_MS = 1100,
-  HIT_R = 12;
+  HIT_R = 14; // raza de lovire (era 12): tinta mai usor de nimerit
+// Ajutor la tintire: daca cursorul e la mai putin de ASSIST_R px de un inamic vizibil, glontul se curbeaza spre el
+const ASSIST_R = 36,
+  ASSIST_MAX = 0.85;
+// Distanta de la punctul (px,py) la segmentul (ax,ay)-(bx,by): gloantele rapide nu mai "sar" peste tinte intre doua frame-uri
+const segDist = (
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+) => {
+  const dx = bx - ax,
+    dy = by - ay,
+    l = dx * dx + dy * dy;
+  const t = l
+    ? Phaser.Math.Clamp(((px - ax) * dx + (py - ay) * dy) / l, 0, 1)
+    : 0;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+};
 const SPAWN_PROTECT_MS = 3000;
 const CORPSE_MS = 60000; // cat sta cadavrul pe jos
 const MAX_DECALS = 350; // pete de sange simultane (cele vechi dispar)
@@ -314,7 +337,7 @@ class RaidScene extends Phaser.Scene {
   private chest: Box | null = null; // gridul containerului deschis
   private chestC: Container | null = null;
   private lootOf = new Map<string, Loot>(); // id item din grid -> loot-ul din container
-  private revealed = new WeakSet<Loot>(); // iteme deja identificate (reveal)
+  private revealed = new WeakSet<Loot>(); // iteme deja deblocate (reveal)
   private reveal: { loot: Loot; t0: number; ms: number } | null = null;
   private fseq = 0;
   private healing: { it: Item; t0: number; ms: number; hp: number } | null =
@@ -415,9 +438,15 @@ class RaidScene extends Phaser.Scene {
 
     const tile = (x: number, y: number, key: string) =>
       this.add.image(x * TILE, y * TILE, key).setOrigin(0);
+    // Asfaltul se deseneaza doar unde nu exista alt teren care sa-l acopere (marcajele sunt transparente)
+    const OVERLAY = new Set(["road_h", "road_v", "cross_h", "cross_v"]);
+    const covered = new Set<number>();
+    for (const [x, y, k] of this.map.ground)
+      if (!OVERLAY.has(k)) covered.add(y * 1000 + x);
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++)
-        tile(x, y, `t_${zoneAt(x, y)}_${(x * 31 + y * 17) % 3}`);
+        if (!covered.has(y * 1000 + x))
+          tile(x, y, `t_road_${(x * 31 + y * 17) % 3}`);
     for (const [x, y, k] of this.map.ground) tile(x, y, `g_${k}`);
     for (const r of this.map.extract) {
       const z = new Phaser.Geom.Rectangle(
@@ -542,6 +571,7 @@ class RaidScene extends Phaser.Scene {
     this.keys = kb.addKeys("W,A,S,D,E,Q,H,R") as Keys;
     this.arrows = kb.createCursorKeys();
     window.addEventListener("keydown", this.onKey);
+    this.input.setDefaultCursor("crosshair");
 
     this.fog = this.add.graphics().setDepth(7);
     this.bar = this.add.graphics().setDepth(8);
@@ -776,18 +806,18 @@ class RaidScene extends Phaser.Scene {
       W * MS + 6,
       H * MS + 6,
     );
-    g.fillStyle(0x1f4d2a).fillRect(x0, y0, W * MS, H * MS);
-    const ring = (f: number, c: number) =>
-      g
-        .fillStyle(c)
-        .fillRect(
-          x0 + ((W - W * f) / 2) * MS,
-          y0 + ((H - H * f) / 2) * MS,
-          W * f * MS,
-          H * f * MS,
-        );
-    ring(0.65, 0x57511f); // zona galbena / rosie: aceleasi praguri ca zoneAt()
-    ring(0.3, 0x5a2626);
+    g.fillStyle(0x2b2e33).fillRect(x0, y0, W * MS, H * MS); // asfalt (fara inele de zona)
+    const gcol: Record<string, number> = {
+      grass: 0x2f6b34,
+      paved: 0x6e7078,
+      sidewalk: 0x8a8d93,
+      floor: 0x6a5a4b,
+      tile: 0xcfd8dc,
+      dirt: 0x7a6246,
+    };
+    for (const [x, y, k] of this.map.ground)
+      if (gcol[k] !== undefined)
+        g.fillStyle(gcol[k]).fillRect(x0 + x * MS, y0 + y * MS, MS, MS);
     const col: Record<string, number> = {
       wall: 0xb0b6bf,
       tree: 0x2e7d32,
@@ -1060,7 +1090,7 @@ class RaidScene extends Phaser.Scene {
     return true;
   }
 
-  // Gridul containerului oglindeste c.items (iteme luate de altii dispar, cele noi apar nerevelate; la cadavre sunt instant revelate)
+  // Gridul containerului oglindeste c.items (iteme luate de altii dispar, cele noi apar nedeblocate; la cadavre sunt instant revelate)
   private syncChest() {
     const ch = this.chest,
       c = this.chestC;
@@ -1085,7 +1115,8 @@ class RaidScene extends Phaser.Scene {
     }
   }
 
-  // Itemele se identifica pe rand, fiecare dupa search_time_ms
+  // Itemele din container sunt gri (`?`) si se deblocheaza pe rand, fiecare in acelasi timp (REVEAL_MS);
+  // dupa deblocare apare tipul itemului cu un mic efect (clasa CSS `pop`)
   private tickReveal(now: number) {
     const c = this.chestC!;
     const next = c.items.find((l) => !this.revealed.has(l));
@@ -1098,25 +1129,32 @@ class RaidScene extends Phaser.Scene {
       return;
     }
     if (this.reveal?.loot !== next)
-      this.reveal = {
-        loot: next,
-        t0: now,
-        ms: this.defs.get(next.item_type)!.search_time_ms,
-      };
+      this.reveal = { loot: next, t0: now, ms: REVEAL_MS };
     const f = (now - this.reveal.t0) / this.reveal.ms;
+    const id = this.chest?.items.find(
+      (i) => this.lootOf.get(i.id) === next,
+    )?.id;
+    const sel = `.it[data-it="${id}"]`;
     if (f >= 1) {
       this.revealed.add(next);
       this.reveal = null;
       this.inv?.render();
-    } else if (this.ovStatus)
-      this.ovStatus.textContent = `Se cauta... ${Math.round(f * 100)}%`;
+      if (id) this.ov?.querySelector(sel)?.classList.add("pop"); // mini efect de deblocare
+    } else {
+      if (id)
+        this.ov
+          ?.querySelector<HTMLElement>(sel)
+          ?.style.setProperty("--p", String(f));
+      if (this.ovStatus)
+        this.ovStatus.textContent = `Se deblocheaza... ${Math.round(f * 100)}%`;
+    }
   }
 
   // Poate fi luat itemul din container? (returneaza mesajul de eroare). Nu mai exista limite pe raritate.
   private checkTake(it: Item): string | null {
     const l = this.lootOf.get(it.id);
     return !l || !this.revealed.has(l)
-      ? "Itemul nu a fost identificat inca"
+      ? "Itemul nu a fost deblocat inca"
       : null;
   }
 
@@ -1158,6 +1196,7 @@ class RaidScene extends Phaser.Scene {
   private useItem(it: Item, from: Box) {
     const B = this.B;
     if (from === this.chest) {
+      if (spec(it.type)?.slot) return this.equipFromChest(it); // rucsac / casca / vesta / arma: se echipeaza direct
       const err = this.checkTake(it);
       if (err) return this.say(err);
       const merge = !!this.findStack(it),
@@ -1185,6 +1224,36 @@ class RaidScene extends Phaser.Scene {
         this.sendPos(this.time.now, true);
       else this.say("Nu se poate echipa / nu incape in inventar");
     }
+  }
+
+  // Clic dreapta pe echipament din container: se echipeaza direct, fara sa treaca prin inventar.
+  // Itemul vechi merge in inventar sau, daca nu incape, ramane in container; daca noul rucsac ar lasa inventarul fara loc, schimbul se anuleaza.
+  private equipFromChest(it: Item) {
+    const err0 = this.checkTake(it);
+    if (err0) return this.say(err0);
+    const B = this.B,
+      ch = this.chest,
+      s = spec(it.type)?.slot,
+      to = s && B[s];
+    if (!ch || !to) return;
+    const before = snap([B.bag, B.head, B.body, B.weapon, B.back, ch]);
+    const prev = to.items[0];
+    ch.items = ch.items.filter((i) => i !== it);
+    Object.assign(it, { x: 0, y: 0, r: false });
+    to.items = [it];
+    const err = refit(this.defs, B.bag, B.back);
+    if (err) {
+      restore(before);
+      return this.say(err);
+    }
+    let toChest = false;
+    if (prev && !autoPlace(this.defs, B.bag, prev)) {
+      autoPlace(this.defs, ch, prev);
+      toChest = true;
+    }
+    this.commitTake(it);
+    if (prev && toChest) this.commitPut(prev);
+    this.sendPos(this.time.now, true);
   }
 
   // ---------- pop-up-uri, depunere, aruncare ----------
@@ -1220,7 +1289,7 @@ class RaidScene extends Phaser.Scene {
       );
   }
 
-  // Item mutat din inventar in containerul deschis: devine loot normal, deja identificat, vizibil si pentru ceilalti
+  // Item mutat din inventar in containerul deschis: devine loot normal, deja deblocat, vizibil si pentru ceilalti
   private commitPut(it: Item) {
     const c = this.chestC,
       k = c && this.ids.get(c);
@@ -2056,12 +2125,25 @@ class RaidScene extends Phaser.Scene {
     const ptr = this.input.activePointer;
     const w = ptr.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
     const p = this.player;
-    const d = this.aim(w);
-    if (d.x || d.y) p.setRotation(Math.atan2(d.y, d.x));
-    this.bar
-      .lineStyle(2, 0xffffff, 0.4)
-      .lineBetween(p.x, p.y, p.x + d.x * 18, p.y + d.y * 18);
+    const raw = this.aim(w);
+    if (raw.x || raw.y) p.setRotation(Math.atan2(raw.y, raw.x));
     const g = this.gun();
+    const { d, lock } = this.assist(raw, w, (g.speed * g.life) / 1000);
+    if (!this.inv && !this.shop && (raw.x || raw.y)) {
+      // linie fina spre cursor (se opreste in primul perete) + cerculet la capat; capatul devine portocaliu cand tinta e "agatata"
+      const full = lock ? lock.dist : Phaser.Math.Distance.Between(p.x, p.y, w.x, w.y);
+      let len = 16;
+      while (len < full && !this.isShot(p.x + d.x * len, p.y + d.y * len))
+        len += 8;
+      len = Math.min(len, full);
+      const ex = p.x + d.x * len,
+        ey = p.y + d.y * len;
+      this.bar
+        .lineStyle(1, 0xffffff, 0.2)
+        .lineBetween(p.x + d.x * 14, p.y + d.y * 14, ex, ey)
+        .lineStyle(1, lock ? 0xff7043 : 0xffffff, lock ? 0.8 : 0.45)
+        .strokeCircle(ex, ey, lock ? 7 : 5);
+    }
     if (
       !this.inv &&
       !this.shop &&
@@ -2094,6 +2176,50 @@ class RaidScene extends Phaser.Scene {
       void this.net.send("shot", m); // un singur mesaj, chiar si pentru shotgun: alicele se deduc din seed
       if (this.magNow() <= 0) this.startReload();
     }
+  }
+
+  // Linie libera (fara pereti care opresc gloantele) intre doua puncte
+  private clearLine(x0: number, y0: number, x1: number, y1: number) {
+    const dx = x1 - x0,
+      dy = y1 - y0,
+      n = Math.ceil(Math.hypot(dx, dy) / 8);
+    for (let i = 1; i < n; i++)
+      if (this.isShot(x0 + (dx * i) / n, y0 + (dy * i) / n)) return false;
+    return true;
+  }
+
+  // Aim assist: cel mai apropiat inamic vizibil de cursor (in ASSIST_R px), cu linie libera si in raza armei, atrage directia de tragere.
+  // `lock` = inamicul agatat (distanta pana la el) sau null; `d` = directia finala.
+  private assist(
+    d: Phaser.Math.Vector2,
+    w: { x: number; y: number },
+    range: number,
+  ) {
+    if (!d.x && !d.y) return { d, lock: null };
+    const p = this.player;
+    let best: { x: number; y: number; m: number } | null = null;
+    const test = (x: number, y: number) => {
+      const m = Phaser.Math.Distance.Between(x, y, w.x, w.y);
+      if (m > ASSIST_R || (best && m >= best.m)) return;
+      const dist = Phaser.Math.Distance.Between(x, y, p.x, p.y);
+      if (dist < 20 || dist > range || !this.clearLine(p.x, p.y, x, y)) return;
+      best = { x, y, m };
+    };
+    for (const bot of this.bots.values())
+      if (bot.hp > 0 && this.see(bot.x, bot.y)) test(bot.x, bot.y);
+    for (const r of this.remotes.values())
+      if (r.hp > 0 && r.g.visible) test(r.dx, r.dy);
+    const t = best as { x: number; y: number; m: number } | null;
+    if (!t) return { d, lock: null };
+    const k = ASSIST_MAX * Phaser.Math.Clamp((ASSIST_R - t.m) / (ASSIST_R - 8), 0, 1);
+    const to = new Phaser.Math.Vector2(t.x - p.x, t.y - p.y);
+    const dist = to.length();
+    to.normalize();
+    const out = new Phaser.Math.Vector2(
+      d.x * (1 - k) + to.x * k,
+      d.y * (1 - k) + to.y * k,
+    ).normalize();
+    return { d: out, lock: { dist } };
   }
 
   private aim(w: { x: number; y: number }) {
@@ -2137,6 +2263,8 @@ class RaidScene extends Phaser.Scene {
       me = this.cfg.me.id;
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
+      const ox = b.x,
+        oy = b.y;
       b.x += b.vx * s;
       b.y += b.vy * s;
       b.life -= dt;
@@ -2147,7 +2275,7 @@ class RaidScene extends Phaser.Scene {
       if (!gone && this.hostSeen === me && !isBot(b.owner)) {
         // hostul aplica damage-ul pe boti
         for (const bot of this.bots.values()) {
-          if (Phaser.Math.Distance.Between(b.x, b.y, bot.x, bot.y) < HIT_R) {
+          if (segDist(bot.x, bot.y, ox, oy, b.x, b.y) < HIT_R) {
             gone = true;
             this.hitBot(bot, b.owner, b.dm);
             this.blood(b.x, b.y, b.vx, b.vy);
@@ -2158,7 +2286,7 @@ class RaidScene extends Phaser.Scene {
       if (!gone) {
         for (const [id, r] of this.remotes) {
           if (id === b.owner || (isBot(id) && isBot(b.owner))) continue;
-          if (Phaser.Math.Distance.Between(b.x, b.y, r.dx, r.dy) < HIT_R) {
+          if (segDist(r.dx, r.dy, ox, oy, b.x, b.y) < HIT_R) {
             gone = true;
             this.blood(b.x, b.y, b.vx, b.vy);
             break;
@@ -2170,8 +2298,7 @@ class RaidScene extends Phaser.Scene {
         b.owner !== me &&
         now > this.protectedUntil &&
         !this.dying &&
-        Phaser.Math.Distance.Between(b.x, b.y, this.player.x, this.player.y) <
-          HIT_R
+        segDist(this.player.x, this.player.y, ox, oy, b.x, b.y) < HIT_R
       ) {
         gone = true;
         this.hurt(b.dm, b.owner, b.vx, b.vy);

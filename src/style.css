@@ -179,12 +179,20 @@ input:focus { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(255, 180, 0
 .it svg { width: 62%; height: 62%; max-width: 46px; max-height: 46px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7)); }
 .it .nm { position: absolute; left: 4px; top: 2px; right: 4px; font: 600 11px/1.1 var(--display); letter-spacing: 0.6px; color: var(--bone); text-align: left; text-transform: uppercase; text-shadow: 0 1px 2px #000; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .it b { position: absolute; right: 4px; bottom: 2px; font: 700 13px/1 var(--display); color: var(--bone); text-shadow: 0 1px 2px #000; }
-.it.hid { cursor: default; filter: saturate(0.4) brightness(0.8); animation: scan 1.1s ease-in-out infinite alternate; }
+.it.hid { --rc: #7d838d; cursor: default; filter: saturate(0.25) brightness(0.85); }
+.it.hid:hover { filter: saturate(0.25) brightness(0.85); box-shadow: inset 0 0 12px rgba(125, 131, 141, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.5); }
+.it .pg { position: absolute; left: 0; bottom: 0; height: 4px; width: calc(var(--p, 0) * 100%); background: var(--amber); }
 .it .q { font: 700 22px var(--display); color: var(--muted); }
-@keyframes scan { to { filter: saturate(0.4) brightness(1.05); } }
 .r-common { --rc: #a3a8ae; } .r-uncommon { --rc: #4cc26b; } .r-rare { --rc: #3d97ee; } .r-epic { --rc: #b45cd0; } .r-legendary { --rc: #ff9a1f; }
 .it.r-legendary:not(.hid) { animation: glow 2.4s ease-in-out infinite alternate; }
 @keyframes glow { to { box-shadow: inset 0 0 14px color-mix(in srgb, var(--rc) 45%, transparent), 0 0 12px color-mix(in srgb, var(--rc) 50%, transparent); } }
+/* mini efect cand un item din container se deblocheaza (dupa regula legendarelor, ca sa o suprascrie) */
+.it.pop, .it.r-legendary.pop { animation: unlock 0.55s ease-out; }
+@keyframes unlock {
+  0% { transform: scale(0.75); filter: brightness(3) saturate(0.2); box-shadow: 0 0 0 0 var(--rc); }
+  45% { transform: scale(1.12); filter: brightness(1.7); box-shadow: 0 0 22px 6px color-mix(in srgb, var(--rc) 70%, transparent); }
+  100% { transform: scale(1); filter: none; }
+}
 
 .dragghost { position: fixed; z-index: 1500; pointer-events: none; opacity: 0.92; filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.6)); transform: scale(1.04); }
 .dragghost.tossing { opacity: 0.6; outline: 2px dashed var(--amber); }

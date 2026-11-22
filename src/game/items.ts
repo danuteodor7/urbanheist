@@ -109,9 +109,11 @@ function infer(d: Def): Spec | undefined {
 // Apeleaza o data dupa ce ai incarcat item_defs (hub si raid): itemele necunoscute devin utilizabile
 export function registerDefs(defs: Iterable<Def>) {
   for (const d of defs) {
-    if (CATALOG[d.item_type]) continue;
-    const sp = infer(d);
-    if (sp) CATALOG[d.item_type] = sp;
+    let sp = CATALOG[d.item_type] ?? infer(d);
+    if (!sp) continue;
+    // vesta legendara = 4x4, ca rucsacul legendar
+    if (sp.slot === 'body' && d.rarity === 'legendary') sp = { ...sp, w: 4, h: 4 };
+    CATALOG[d.item_type] = sp;
   }
 }
 

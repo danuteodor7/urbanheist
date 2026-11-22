@@ -1,14 +1,12 @@
 export const TILE = 32;
-export const W = 104;
-export const H = 72;
-export const NX = 12;   // celule pe orizontala (8x8 tiles fiecare)
-export const NY = 8;    // celule pe verticala
+export const W = 120;
+export const H = 80;
 export const RESET_MS = 60 * 1000;   // loot-ul se reseteaza la fiecare minut
 export const epochNow = () => Math.floor(Date.now() / RESET_MS);   // shortcut: ceasul clientului, abaterea de cateva secunde e tolerata
 
 export type Zone = 'green' | 'yellow' | 'red';
 export type WallKind = 'wall' | 'tree' | 'crate' | 'fence' | 'car' | 'lock' | 'shelf' | 'pump' | 'counter' | 'water';
-export type Ground = 'floor' | 'grass' | 'paved' | 'tile' | 'road_h' | 'road_v' | 'dirt';
+export type Ground = 'floor' | 'grass' | 'paved' | 'tile' | 'road_h' | 'road_v' | 'dirt' | 'sidewalk' | 'cross_h' | 'cross_v';
 export type Wall = [number, number, WallKind?];
 export type ItemDef = { item_type: string; name: string; rarity: string; slots: number; stackable: boolean; search_time_ms: number };
 export type Loot = { item_type: string; quantity: number };
@@ -39,7 +37,7 @@ export type GameMap = {
 // Doar peretii, copacii, lazile si usile incuiate blocheaza vederea; gardurile, masinile, rafturile si pompele nu
 export const blocksView = (k: WallKind = 'wall') => k === 'wall' || k === 'tree' || k === 'crate' || k === 'lock';
 
-// Zone = inele concentrice dupa distanta fata de centrul hartii
+// Zone = inele concentrice dupa distanta fata de centrul hartii (conteaza DOAR pentru calitatea loot-ului, nu si pentru aspectul terenului)
 export function zoneAt(tx: number, ty: number): Zone {
   const d = Math.max(Math.abs(tx - W / 2) / (W / 2), Math.abs(ty - H / 2) / (H / 2));
   return d < 0.3 ? 'red' : d < 0.65 ? 'yellow' : 'green';
@@ -60,10 +58,11 @@ const CELLS: Record<Zone, [string, number][]> = {
   red: [['warehouse', 26], ['ruins', 28], ['house', 10], ['plaza', 6], ['shop', 6], ['clinic', 10], ['camp', 14]],
 };
 
-// Celule rezervate pentru comercianti (mereu in zona verde, aproape de extractii): "cx,cy" -> tip magazin
-const TRADERS: Record<string, ShopKind> = {
-  '1,1': 'arms', '10,6': 'arms', '10,1': 'ammo', '1,6': 'ammo',
-  '5,0': 'med', '6,7': 'med', '1,3': 'gear', '10,4': 'gear',
+// Loturi mici (cel putin o latura sub 6 tiles): doar lucruri care incap pe 5x5
+const SMALL: Record<Zone, [string, number][]> = {
+  green: [['house', 45], ['park', 20], ['parking', 20], ['plaza', 15]],
+  yellow: [['house', 30], ['ruins', 25], ['parking', 20], ['plaza', 10], ['park', 15]],
+  red: [['ruins', 50], ['house', 20], ['parking', 20], ['plaza', 10]],
 };
 
 // Loot tematic: magazinele dau gloante / medicamente / rucsacuri (doar daca exista in item_defs)
@@ -117,13 +116,15 @@ export function rerollLoot(map: GameMap, epoch: number, defs: ItemDef[], n = map
   }
 }
 
+type Rect = { x: number; y: number; w: number; h: number };
+
 export function generateMap(seed: string, defs: ItemDef[]): GameMap {
   const rng = rngFrom(seed);
   const int = (n: number) => Math.floor(rng() * n);
   const walls: Wall[] = [];
-  const ground: [number, number, Ground][] = [];
+  const groundAt = new Map<number, Ground>();   // ultimul strat castiga: un tile are un singur teren (mai putine imagini in joc)
   const solid = new Set<number>();
-  const key = (x: number, y: number) => y * 100 + x;
+  const key = (x: number, y: number) => y * 1000 + x;
 
   const wall = (x: number, y: number, k: WallKind = 'wall') => {
     if (solid.has(key(x, y))) return;
@@ -131,7 +132,7 @@ export function generateMap(seed: string, defs: ItemDef[]): GameMap {
     walls.push([x, y, k]);
   };
   const lay = (x0: number, y0: number, w: number, h: number, g: Ground) => {
-    for (let x = x0; x < x0 + w; x++) for (let y = y0; y < y0 + h; y++) ground.push([x, y, g]);
+    for (let x = x0; x < x0 + w; x++) for (let y = y0; y < y0 + h; y++) groundAt.set(key(x, y), g);
   };
   // Un obstacol fara vecini solizi (8 directii) nu poate sigila niciodata un pasaj sau un container
   const isolated = (x: number, y: number) => {
@@ -139,9 +140,50 @@ export function generateMap(seed: string, defs: ItemDef[]): GameMap {
     return true;
   };
 
-  // Marcaje pe strazi (decor): linie intrerupta pe mijlocul fiecarei strazi de 2 tiles
-  for (let k = 0; k < NX - 1; k++) for (let y = 1; y < H - 1; y++) ground.push([11 + 8 * k, y, 'road_v']);
-  for (let k = 0; k < NY - 1; k++) for (let x = 1; x < W - 1; x++) ground.push([x, 11 + 8 * k, 'road_h']);
+  // ---------- reteaua de strazi ----------
+  // Blocuri de 10..17 tiles separate de strazi de 2 tiles (cate 1-2 artere late de 4); un bloc e rezervat bancii (mereu in treimea din mijloc, dar nu fix in centru)
+  type Axis = { blocks: [number, number][]; streets: [number, number][]; bank: number };
+  const layoutAxis = (len: number, avenues: number, bankSize: number): Axis => {
+    const n = Math.round((len + 2) / 15);
+    const sw: number[] = Array(n - 1).fill(2);
+    for (let a = avenues; a > 0; a--) {
+      const i = int(n - 1);
+      if (sw[i] === 2 && sw[i - 1] !== 4 && sw[i + 1] !== 4) sw[i] = 4;
+    }
+    const mids: number[] = [];
+    for (let i = 0; i < n; i++) if ((i + 0.5) / n >= 0.3 && (i + 0.5) / n <= 0.7) mids.push(i);
+    const bank = mids[int(mids.length)];
+    const rest = len - sw.reduce((s, v) => s + v, 0) - bankSize;
+    const base = Math.floor(rest / (n - 1));
+    let extra = rest - base * (n - 1);
+    const size: number[] = [];
+    for (let i = 0; i < n; i++) size.push(i === bank ? bankSize : base + (extra-- > 0 ? 1 : 0));
+    for (let t = 0; t < 80; t++) {   // blocuri de marimi diferite
+      const a = int(n), b = int(n), d = 1 + int(2);
+      if (a === b || a === bank || b === bank) continue;
+      if (size[a] - d >= 10 && size[b] + d <= 17) { size[a] -= d; size[b] += d; }
+    }
+    const blocks: [number, number][] = [], streets: [number, number][] = [];
+    let p = 5;
+    for (let i = 0; i < n; i++) {
+      blocks.push([p, size[i]]);
+      p += size[i];
+      if (i < n - 1) { streets.push([p, sw[i]]); p += sw[i]; }
+    }
+    return { blocks, streets, bank };
+  };
+  const BANK_W = 13, BANK_H = 14;
+  const AX = layoutAxis(W - 10, 1 + int(2), BANK_W + 4);
+  const AY = layoutAxis(H - 10, 1, BANK_H + 4);
+  const inStreet = (streets: [number, number][], v: number) => streets.some(([s, w]) => v >= s && v < s + w);
+
+  // Marcaje: linie intrerupta pe mijlocul strazilor, in afara intersectiilor; zebre la fiecare intersectie
+  for (const [s, w] of AX.streets) for (let y = 1; y < H - 1; y++) if (!inStreet(AY.streets, y)) lay(s + w / 2 - 1, y, 1, 1, 'road_v');
+  for (const [s, w] of AY.streets) for (let x = 1; x < W - 1; x++) if (!inStreet(AX.streets, x)) lay(x, s + w / 2 - 1, 1, 1, 'road_h');
+  for (const [vx, vw] of AX.streets) for (const [hy, hh] of AY.streets) {
+    lay(vx, hy - 1, vw, 1, 'cross_v'); lay(vx, hy + hh, vw, 1, 'cross_v');
+    lay(vx - 1, hy, 1, hh, 'cross_h'); lay(vx + vw, hy, 1, hh, 'cross_h');
+  }
 
   for (let x = 0; x < W; x++) { wall(x, 0); wall(x, H - 1); }
   for (let y = 1; y < H - 1; y++) { wall(0, y); wall(W - 1, y); }
@@ -177,123 +219,205 @@ export function generateMap(seed: string, defs: ItemDef[]): GameMap {
     }
   };
   const vspots: [number, number][] = [];   // locuri pentru masini (benzinarii)
-
   const shops: Shop[] = [];
-  // 12x8 celule de 8x8 tiles, strazi de 2 tiles intre ele; fiecare celula primeste un tip de loc
-  for (let cx = 0; cx < NX; cx++) {
-    for (let cy = 0; cy < NY; cy++) {
-      if ((cx === 5 || cx === 6) && (cy === 3 || cy === 4)) continue; // aici e banca
-      const bx = 5 + cx * 8, by = 5 + cy * 8;
-      const zone = zoneAt(bx + 3, by + 3);
-      const trader = TRADERS[`${cx},${cy}`];
-      const r0 = rng();
-      const kind = trader ? 'trader' : pick(r0, CELLS[zone]);
 
-      if (kind === 'trader') {
-        // comerciant: cladire deschisa, podea alba, tejghea de 2 tiles (doua tile-uri solide, nu sigileaza interiorul 4x4)
-        building(bx, by, 6, 6, [door(bx, by, 6, 6)]);
-        lay(bx + 1, by + 1, 4, 4, 'tile');
-        wall(bx + 2, by + 2, 'counter');
-        wall(bx + 3, by + 2, 'counter');
-        shops.push({ x: bx + 2, y: by + 2, kind: trader });
-      } else if (kind === 'house' || kind === 'ruins') {
-        const w = 5 + int(2), h = 5 + int(2);
-        const d = door(bx, by, w, h);
-        const locked = kind === 'house' && rng() < 0.45;   // case incuiate: cheia se gaseste in loot, dar si loot-ul e mai bun
-        building(bx, by, w, h, [d], kind === 'ruins' ? 0.35 : 0);
-        if (locked) lock(d[0], d[1], 'Casa', `h${cx}_${cy}`);
-        addBox(bx + 1, by + 1, w - 2, h - 2, zone, 1 + int(2), locked);
-      } else if (kind === 'warehouse') {
-        // doua usi opuse, lazi in interior (doar pe pozitii pare: niciodata doua alaturate)
-        const doors: [number, number][] = [[bx, by + 1 + int(4)], [bx + 5, by + 1 + int(4)]];
-        building(bx, by, 6, 6, doors);
-        for (const [dx, dy] of doors) lock(dx, dy, 'Depozit', `w${cx}_${cy}`);   // depozitele sunt incuiate
-        for (const [ox, oy] of [[2, 2], [4, 2], [2, 4], [4, 4]]) if (rng() < 0.5) wall(bx + ox, by + oy, 'crate');
-        addBox(bx + 1, by + 1, 4, 4, zone, 2 + int(2), true);
-      } else if (kind === 'shop' || kind === 'clinic') {
-        // magazin / farmacie: usa deschisa, podea alba, raft in mijloc (nu sigileaza niciodata interiorul 4x4)
-        building(bx, by, 6, 6, [door(bx, by, 6, 6)]);
-        lay(bx + 1, by + 1, 4, 4, 'tile');
-        wall(bx + 2, by + 2, 'shelf');
-        wall(bx + 3, by + 2, 'shelf');
-        addBox(bx + 1, by + 1, 4, 4, zone, 2 + int(2), false, kind === 'clinic' ? 'med' : (['ammo', 'med', 'pack'] as const)[int(3)]);
-      } else if (kind === 'gas') {
-        // benzinarie: pavaj, magazin mic 3x3 in colt, doua pompe, o masina parcata
-        lay(bx, by, 6, 6, 'paved');
-        building(bx, by, 3, 3, [[bx + 1, by + 2]]);
-        wall(bx + 5, by + 1, 'pump');
-        wall(bx + 5, by + 4, 'pump');
-        addBox(bx + 1, by + 1, 1, 1, zone, 1, false, 'ammo');
-        addBox(bx + 3, by + 3, 3, 3, zone, 1);
-        vspots.push([bx + 3, by + 4]);
-      } else if (kind === 'park') {
-        lay(bx, by, 6, 6, 'grass');
-        for (let n = 8 + int(5); n > 0; n--) {
-          const x = bx + int(6), y = by + int(6);
-          if (isolated(x, y)) wall(x, y, 'tree');
-        }
-        addBox(bx, by, 6, 6, zone, 1 + int(2));
-      } else if (kind === 'parking') {
-        lay(bx, by, 6, 6, 'paved');
-        for (const oy of [1, 4]) {
-          for (const ox of [0, 3]) if (rng() < 0.7) { wall(bx + ox, by + oy, 'car'); wall(bx + ox + 1, by + oy, 'car'); }
-        }
-        addBox(bx, by, 6, 6, zone, 1);
-      } else if (kind === 'plaza') {
-        lay(bx, by, 6, 6, 'paved');
-        for (let n = 3 + int(3); n > 0; n--) {
-          const x = bx + 1 + int(4), y = by + 1 + int(4);
-          if (isolated(x, y)) wall(x, y, 'crate');
-        }
-        addBox(bx + 2, by + 2, 2, 2, zone, 1);
-      } else if (kind === 'lake') {
-        // lac: apa 4x4 cu colturile rotunjite, mal liber pe margine (se poate ocoli), copaci in colturi
-        lay(bx, by, 6, 6, 'grass');
-        for (let x = 1; x < 5; x++) for (let y = 1; y < 5; y++) {
-          if ((x === 1 || x === 4) && (y === 1 || y === 4)) continue;
-          wall(bx + x, by + y, 'water');
-        }
-        for (const [ox, oy] of [[0, 0], [5, 0], [0, 5], [5, 5]]) if (rng() < 0.7 && isolated(bx + ox, by + oy)) wall(bx + ox, by + oy, 'tree');
-        addBox(bx, by, 6, 6, zone, 2 + int(2));
-      } else if (kind === 'camp') {
-        // tabara militara: gard cu 4 porti, pamant batut, cateva lazi (corturi), loot tematic cu gloante
-        lay(bx, by, 6, 6, 'dirt');
-        const gT = bx + 1 + int(4), gB = bx + 1 + int(4), gL = by + 1 + int(4), gR = by + 1 + int(4);
-        for (let i = 0; i < 6; i++) {
-          if (bx + i !== gT) wall(bx + i, by, 'fence');
-          if (bx + i !== gB) wall(bx + i, by + 5, 'fence');
-          if (by + i !== gL) wall(bx, by + i, 'fence');
-          if (by + i !== gR) wall(bx + 5, by + i, 'fence');
-        }
-        for (let n = 2; n > 0; n--) {
-          const x = bx + 2 + int(2), y = by + 2 + int(2);
-          if (isolated(x, y)) wall(x, y, 'crate');
-        }
-        addBox(bx + 1, by + 1, 4, 4, zone, 2 + int(2), zone === 'red', 'ammo');
-      } else if (kind === 'market') {
-        // piata: doua randuri de taraba (rafturi) pe pavaj; nu sigileaza nimic (mereu trecere pe margini)
-        lay(bx, by, 6, 6, 'paved');
-        for (const oy of [1, 4]) for (const ox of [1, 3]) if (rng() < 0.85) { wall(bx + ox, by + oy, 'shelf'); wall(bx + ox + 1, by + oy, 'shelf'); }
-        addBox(bx, by, 6, 6, zone, 2 + int(2), false, rng() < 0.5 ? 'med' : 'ammo');
+  // ---------- blocuri si loturi ----------
+  // Fiecare bloc: trotuar pe margine, apoi interiorul impartit in 1-4 loturi (separate de alei de 1 tile, deci mereu ocolibile)
+  const lots: Rect[] = [];
+  const subdivide = (r: Rect) => {
+    const cv = r.w >= 11, ch = r.h >= 11;
+    if ((cv || ch) && rng() < 0.85) {
+      const vertical = cv && (!ch || r.w > r.h || (r.w === r.h && rng() < 0.5));
+      if (vertical) {
+        const a = 5 + int(r.w - 10);
+        subdivide({ x: r.x, y: r.y, w: a, h: r.h });
+        subdivide({ x: r.x + a + 1, y: r.y, w: r.w - a - 1, h: r.h });
       } else {
-        // yard: gard cu doua porti, casa 3x3 in coltul stanga-sus, coridor liber pe dreapta si jos
-        lay(bx, by, 6, 6, 'grass');
-        const gateA = by + 1 + int(3), gateB = bx + 1 + int(3);
-        for (let i = 0; i < 6; i++) {
-          wall(bx + i, by, 'fence');
-          wall(bx, by + i, 'fence');
-          if (bx + i !== gateB) wall(bx + i, by + 5, 'fence');
-          if (by + i !== gateA) wall(bx + 5, by + i, 'fence');
-        }
-        building(bx + 1, by + 1, 3, 3, [[bx + 3, by + 2]]);
-        addBox(bx + 2, by + 2, 1, 1, zone, 1);
-        addBox(bx + 1, by + 4, 4, 1, zone, 1);
+        const a = 5 + int(r.h - 10);
+        subdivide({ x: r.x, y: r.y, w: r.w, h: a });
+        subdivide({ x: r.x, y: r.y + a + 1, w: r.w, h: r.h - a - 1 });
       }
+      return;
+    }
+    lots.push(r);
+  };
+  const ring: [number, number][] = [];   // tile-uri de trotuar (pentru copaci stradali)
+  let bankBlock: Rect = { x: 0, y: 0, w: 0, h: 0 };
+  AX.blocks.forEach(([bx, bw], i) => AY.blocks.forEach(([by, bh], j) => {
+    lay(bx, by, bw, bh, 'sidewalk');
+    for (let x = bx + 1; x < bx + bw - 1; x++) ring.push([x, by], [x, by + bh - 1]);
+    for (let y = by + 1; y < by + bh - 1; y++) ring.push([bx, y], [bx + bw - 1, y]);
+    if (i === AX.bank && j === AY.bank) bankBlock = { x: bx, y: by, w: bw, h: bh };
+    else subdivide({ x: bx + 1, y: by + 1, w: bw - 2, h: bh - 2 });
+  }));
+
+  // Comerciantii: 8 loturi din zona verde, cat mai departe unul de altul; cele doua magazine de acelasi fel sunt si ele departe
+  const zoneOf = (r: Rect) => zoneAt(r.x + (r.w >> 1), r.y + (r.h >> 1));
+  const dist = (a: Rect, b: Rect) => Math.hypot(a.x + a.w / 2 - b.x - b.w / 2, a.y + a.h / 2 - b.y - b.h / 2);
+  const traderOf = new Map<number, ShopKind>();
+  {
+    const big = lots.map((_, i) => i).filter((i) => lots[i].w >= 6 && lots[i].h >= 6);
+    let cand = big.filter((i) => zoneOf(lots[i]) === 'green');
+    if (cand.length < 8) cand = big;
+    const picked = [cand[int(cand.length)]];
+    while (picked.length < 8) {
+      let best = -1, bd = -1;
+      for (const i of cand) {
+        if (picked.includes(i)) continue;
+        const d = Math.min(...picked.map((p) => dist(lots[i], lots[p])));
+        if (d > bd) { bd = d; best = i; }
+      }
+      picked.push(best);
+    }
+    const kinds: ShopKind[] = ['arms', 'ammo', 'med', 'gear'];
+    for (let i = kinds.length - 1; i > 0; i--) { const j = int(i + 1); [kinds[i], kinds[j]] = [kinds[j], kinds[i]]; }
+    const first = new Map<ShopKind, number>();
+    kinds.forEach((k, n) => { traderOf.set(picked[n], k); first.set(k, picked[n]); });
+    const left = [...kinds];
+    for (const p of picked.slice(4)) {
+      let best = 0, bd = -1;
+      left.forEach((k, n) => { const d = dist(lots[p], lots[first.get(k)!]); if (d > bd) { bd = d; best = n; } });
+      traderOf.set(p, left.splice(best, 1)[0]);
     }
   }
 
-  // Banca in centru (zona rosie): trei camere late, pereti interiori cu treceri decalate, doua usi
-  const BX = 46, BY = 30, BW = 13, BH = 14;
+  lots.forEach((L, li) => {
+    const { x: lx, y: ly, w: lw, h: lh } = L;
+    const zone = zoneOf(L);
+    const trader = traderOf.get(li);
+    const kind = trader ? 'trader' : pick(rng(), Math.min(lw, lh) < 6 ? SMALL[zone] : CELLS[zone]);
+    const area = lw * lh;
+
+    if (kind === 'trader') {
+      // comerciant: cladire deschisa 6x6, podea alba, tejghea de 2 tiles (nu sigileaza interiorul 4x4)
+      const bx = lx + int(lw - 5), by = ly + int(lh - 5);
+      lay(lx, ly, lw, lh, 'paved');
+      building(bx, by, 6, 6, [door(bx, by, 6, 6)]);
+      lay(bx + 1, by + 1, 4, 4, 'tile');
+      wall(bx + 2, by + 2, 'counter');
+      wall(bx + 3, by + 2, 'counter');
+      shops.push({ x: bx + 2, y: by + 2, kind: trader! });
+    } else if (kind === 'house' || kind === 'ruins') {
+      // casa pe gazon (sau ruina pe pamant), mai mare daca incape; peste 7 tiles latime are un perete interior cu trecere
+      const hw = Math.min(lw, 5 + int(4)), hh = Math.min(lh, 5 + int(3));
+      const bx = lx + int(lw - hw + 1), by = ly + int(lh - hh + 1);
+      lay(lx, ly, lw, lh, kind === 'house' ? 'grass' : 'dirt');
+      const part = kind === 'house' && hw >= 7 ? bx + 3 : -1;
+      let d = door(bx, by, hw, hh);
+      while (d[0] === part && (d[1] === by || d[1] === by + hh - 1)) d = door(bx, by, hw, hh);
+      const locked = kind === 'house' && rng() < 0.45;   // case incuiate: cheia se gaseste in loot, dar si loot-ul e mai bun
+      building(bx, by, hw, hh, [d], kind === 'ruins' ? 0.35 : 0);
+      if (part >= 0) { const gap = by + 1 + int(hh - 2); for (let y = by + 1; y < by + hh - 1; y++) if (y !== gap) wall(part, y); }
+      if (locked) lock(d[0], d[1], 'Casa', `h${li}`);
+      addBox(bx + 1, by + 1, hw - 2, hh - 2, zone, 1 + int(2) + (hw * hh > 40 ? 1 : 0), locked);
+      for (let n = kind === 'house' ? int(3) + (area > 70 ? 2 : 0) : 2 + int(3); n > 0; n--) {
+        const x = lx + int(lw), y = ly + int(lh);
+        if (isolated(x, y) && !containers.some((c) => c.x === x && c.y === y)) wall(x, y, kind === 'house' ? 'tree' : 'crate');
+      }
+    } else if (kind === 'warehouse') {
+      // depozit mare, doua usi opuse, lazi in interior pe o grila rara (nu ating peretii: interiorul ramane strabatabil)
+      const bw = Math.min(lw, 6 + int(5)), bh = Math.min(lh, 6 + int(3));
+      const bx = lx + int(lw - bw + 1), by = ly + int(lh - bh + 1);
+      lay(lx, ly, lw, lh, 'paved');
+      const doors: [number, number][] = [[bx, by + 1 + int(bh - 2)], [bx + bw - 1, by + 1 + int(bh - 2)]];
+      building(bx, by, bw, bh, doors);
+      for (const [dx, dy] of doors) lock(dx, dy, 'Depozit', `w${li}`);   // depozitele sunt incuiate
+      for (let ox = 2; ox <= bw - 3; ox += 2) for (let oy = 2; oy <= bh - 3; oy += 2) if (rng() < 0.45) wall(bx + ox, by + oy, 'crate');
+      addBox(bx + 1, by + 1, bw - 2, bh - 2, zone, 2 + int(2) + (bw * bh > 50 ? 1 : 0), true);
+    } else if (kind === 'shop' || kind === 'clinic') {
+      // magazin / farmacie: usa deschisa, podea alba, 1-2 randuri de rafturi (nu ating peretii)
+      const bw = Math.min(lw, 6 + int(3)), bh = Math.min(lh, 6 + int(2));
+      const bx = lx + int(lw - bw + 1), by = ly + int(lh - bh + 1);
+      lay(lx, ly, lw, lh, 'paved');
+      building(bx, by, bw, bh, [door(bx, by, bw, bh)]);
+      lay(bx + 1, by + 1, bw - 2, bh - 2, 'tile');
+      for (let x = bx + 2; x <= bx + bw - 3; x++) { wall(x, by + 2, 'shelf'); if (bh === 7) wall(x, by + 4, 'shelf'); }
+      addBox(bx + 1, by + 1, bw - 2, bh - 2, zone, 2 + int(2), false, kind === 'clinic' ? 'med' : (['ammo', 'med', 'pack'] as const)[int(3)]);
+    } else if (kind === 'gas') {
+      // benzinarie: pavaj, magazin mic 3x3 in colt, doua pompe, o masina parcata
+      lay(lx, ly, lw, lh, 'paved');
+      building(lx, ly, 3, 3, [[lx + 1, ly + 2]]);
+      wall(lx + lw - 1, ly + 1, 'pump');
+      wall(lx + lw - 1, ly + lh - 2, 'pump');
+      addBox(lx + 1, ly + 1, 1, 1, zone, 1, false, 'ammo');
+      addBox(lx + 3, ly + 3, lw - 3, lh - 3, zone, 1);
+      vspots.push([lx + 3, ly + lh - 2]);
+    } else if (kind === 'park') {
+      lay(lx, ly, lw, lh, 'grass');
+      if (area >= 49) { lay(lx, ly + (lh >> 1), lw, 1, 'paved'); lay(lx + (lw >> 1), ly, 1, lh, 'paved'); }   // alei
+      for (let n = Math.floor(area / 4.5) + int(4); n > 0; n--) {
+        const x = lx + int(lw), y = ly + int(lh);
+        if (groundAt.get(key(x, y)) !== 'paved' && isolated(x, y)) wall(x, y, 'tree');
+      }
+      addBox(lx, ly, lw, lh, zone, 1 + int(2) + (area > 80 ? 1 : 0));
+    } else if (kind === 'parking') {
+      lay(lx, ly, lw, lh, 'paved');
+      for (const oy of [1, lh - 2]) {
+        for (let ox = 0; ox + 1 < lw; ox += 3) if (rng() < 0.7) { wall(lx + ox, ly + oy, 'car'); wall(lx + ox + 1, ly + oy, 'car'); }
+      }
+      addBox(lx, ly, lw, lh, zone, 1 + (area > 70 ? 1 : 0));
+    } else if (kind === 'plaza') {
+      lay(lx, ly, lw, lh, 'paved');
+      if (lw >= 7 && lh >= 7) {   // fantana in mijloc
+        const fx = lx + (lw >> 1) - 1, fy = ly + (lh >> 1) - 1;
+        for (let dx = 0; dx < 2; dx++) for (let dy = 0; dy < 2; dy++) wall(fx + dx, fy + dy, 'water');
+      }
+      for (let n = 3 + int(3); n > 0; n--) {
+        const x = lx + 1 + int(lw - 2), y = ly + 1 + int(lh - 2);
+        if (isolated(x, y)) wall(x, y, 'crate');
+      }
+      addBox(lx + 1, ly + 1, lw - 2, lh - 2, zone, 1 + (area > 80 ? 1 : 0));
+    } else if (kind === 'lake') {
+      // lac cu colturile rotunjite, mal liber pe margine (se poate ocoli), copaci in colturi
+      lay(lx, ly, lw, lh, 'grass');
+      const ww = Math.min(lw - 2, 9), wh = Math.min(lh - 2, 9);
+      const wx = lx + 1 + int(lw - 2 - ww + 1), wy = ly + 1 + int(lh - 2 - wh + 1);
+      for (let x = 0; x < ww; x++) for (let y = 0; y < wh; y++) {
+        if ((x === 0 || x === ww - 1) && (y === 0 || y === wh - 1)) continue;
+        wall(wx + x, wy + y, 'water');
+      }
+      for (const [ox, oy] of [[0, 0], [lw - 1, 0], [0, lh - 1], [lw - 1, lh - 1]]) if (rng() < 0.7 && isolated(lx + ox, ly + oy)) wall(lx + ox, ly + oy, 'tree');
+      addBox(lx, ly, lw, lh, zone, 2 + int(2));
+    } else if (kind === 'camp') {
+      // tabara militara: gard cu 4 porti, pamant batut, cateva lazi (corturi), loot tematic cu gloante
+      lay(lx, ly, lw, lh, 'dirt');
+      const gT = lx + 1 + int(lw - 2), gB = lx + 1 + int(lw - 2), gL = ly + 1 + int(lh - 2), gR = ly + 1 + int(lh - 2);
+      for (let i = 0; i < lw; i++) {
+        if (lx + i !== gT) wall(lx + i, ly, 'fence');
+        if (lx + i !== gB) wall(lx + i, ly + lh - 1, 'fence');
+      }
+      for (let i = 0; i < lh; i++) {
+        if (ly + i !== gL) wall(lx, ly + i, 'fence');
+        if (ly + i !== gR) wall(lx + lw - 1, ly + i, 'fence');
+      }
+      for (let n = 2 + (area > 60 ? 2 : 0); n > 0; n--) {
+        const x = lx + 2 + int(lw - 4), y = ly + 2 + int(lh - 4);
+        if (isolated(x, y)) wall(x, y, 'crate');
+      }
+      addBox(lx + 1, ly + 1, lw - 2, lh - 2, zone, 2 + int(2), zone === 'red', 'ammo');
+    } else if (kind === 'market') {
+      // piata: randuri de taraba (rafturi) pe pavaj; marginile raman libere
+      lay(lx, ly, lw, lh, 'paved');
+      for (const oy of lh >= 9 ? [1, lh >> 1, lh - 2] : [1, lh - 2])
+        for (let ox = 1; ox + 1 <= lw - 2; ox += 2) if (rng() < 0.85) { wall(lx + ox, ly + oy, 'shelf'); wall(lx + ox + 1, ly + oy, 'shelf'); }
+      addBox(lx, ly, lw, lh, zone, 2 + int(2), false, rng() < 0.5 ? 'med' : 'ammo');
+    } else {
+      // curte: gard cu doua porti, casa in coltul stanga-sus, coridor liber pe dreapta si jos
+      lay(lx, ly, lw, lh, 'grass');
+      const hw = Math.min(lw - 3, 3 + int(3)), hh = Math.min(lh - 3, 3 + int(3));
+      const gateA = ly + 1 + int(lh - 2), gateB = lx + 1 + int(lw - 2);
+      for (let i = 0; i < lw; i++) { wall(lx + i, ly, 'fence'); if (lx + i !== gateB) wall(lx + i, ly + lh - 1, 'fence'); }
+      for (let i = 0; i < lh; i++) { wall(lx, ly + i, 'fence'); if (ly + i !== gateA) wall(lx + lw - 1, ly + i, 'fence'); }
+      building(lx + 1, ly + 1, hw, hh, [[lx + hw, ly + 2]]);
+      addBox(lx + 2, ly + 2, hw - 2, hh - 2, zone, 1);
+      addBox(lx + 1, ly + hh + 1, lw - 2, 1, zone, 1);
+    }
+  });
+
+  // Banca: intr-un bloc din mijlocul hartii, cu pozitie aleatoare in bloc; trei camere late, pereti interiori cu treceri decalate, doua usi
+  const BW = BANK_W, BH = BANK_H;
+  const BX = bankBlock.x + 1 + int(bankBlock.w - 2 - BW + 1), BY = bankBlock.y + 1 + int(bankBlock.h - 2 - BH + 1);
+  lay(bankBlock.x + 1, bankBlock.y + 1, bankBlock.w - 2, bankBlock.h - 2, 'paved');
   building(BX, BY, BW, BH, [[BX, BY + 2], [BX + BW - 1, BY + BH - 3]]);
   for (let x = BX + 1; x < BX + BW - 1; x++) {
     if (x !== BX + 3 && x !== BX + 9) wall(x, BY + 4);
@@ -303,10 +427,18 @@ export function generateMap(seed: string, defs: ItemDef[]): GameMap {
   lock(BX + BW - 1, BY + BH - 3, 'Banca', 'bank');
   addBox(BX + 1, BY + 1, BW - 2, BH - 2, 'red', 10, true);
 
-  // Masini si lazi imprastiate pe strazi, pentru acoperire
-  for (let n = 130; n > 0; n--) {
-    const x = 4 + int(W - 8), y = 4 + int(H - 8);
-    if (isolated(x, y) && !containers.some((c) => c.x === x && c.y === y)) wall(x, y, rng() < 0.5 ? 'car' : 'crate');
+  // Copaci pe trotuare
+  for (const [x, y] of ring) if (rng() < 0.1 && isolated(x, y) && !containers.some((c) => c.x === x && c.y === y)) wall(x, y, 'tree');
+
+  // Masini abandonate si lazi, mai ales pe strazi
+  const onStreet = (): [number, number] => {
+    if (rng() < 0.5) { const [s, w] = AX.streets[int(AX.streets.length)]; return [s + int(w), 4 + int(H - 8)]; }
+    const [s, w] = AY.streets[int(AY.streets.length)];
+    return [4 + int(W - 8), s + int(w)];
+  };
+  for (let n = 170; n > 0; n--) {
+    const [x, y] = rng() < 0.7 ? onStreet() : [4 + int(W - 8), 4 + int(H - 8)];
+    if (isolated(x, y) && !containers.some((c) => c.x === x && c.y === y)) wall(x, y, rng() < 0.65 ? 'car' : 'crate');
   }
 
   const extract = [
@@ -327,10 +459,11 @@ export function generateMap(seed: string, defs: ItemDef[]): GameMap {
     vehicles.push({ x, y, a: rng() < 0.5 ? 0 : Math.PI / 2 });
   };
   for (const [x, y] of vspots) tryV(x, y);
-  for (let n = 0; vehicles.length < 28 && n < 2000; n++) {
-    if (rng() < 0.5) tryV(11 + 8 * int(NX - 1) + int(2), 3 + int(H - 6));
-    else tryV(3 + int(W - 6), 11 + 8 * int(NY - 1) + int(2));
+  for (let n = 0; vehicles.length < 34 && n < 3000; n++) {
+    const [x, y] = onStreet();
+    tryV(x, y);
   }
 
+  const ground = [...groundAt].map(([k, g]) => [k % 1000, Math.floor(k / 1000), g] as [number, number, Ground]);
   return { walls, ground, containers, extract, locks, vehicles, shops };
 }

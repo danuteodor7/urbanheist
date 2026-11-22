@@ -20,21 +20,18 @@ const speckle = (g: G, key: string, colors: number[], n: number) => {
   }
 };
 
-const ASPHALT = { green: [0x1c3a22, 0x2a5232], yellow: [0x44401f, 0x5e582c], red: [0x421f1f, 0x5e2c2c] };
+const ASPHALT = [0x2b2e33, 0x3d4148];   // asfalt gri, la fel peste tot (zonele de loot nu mai sunt colorate)
 
 export function makeTextures(s: Phaser.Scene) {
   if (s.textures.exists('player')) return;
 
-  // ---- teren: 3 variante per zona + podea/iarba/pavaj ----
-  for (const [z, [a, b]] of Object.entries(ASPHALT)) {
-    for (let v = 0; v < 3; v++) {
-      const key = `t_${z}_${v}`;
-      tex(s, key, T, T, (g) => {
-        g.fillStyle(a).fillRect(0, 0, T, T);
-        speckle(g, key, [b, 0x000000, 0xffffff], 30);
-        g.fillStyle(0x000000, 0.2).fillRect(0, T - 1, T, 1).fillRect(T - 1, 0, 1, T);
-      });
-    }
+  // ---- teren: 3 variante de asfalt + podea/iarba/pavaj/trotuar ----
+  for (let v = 0; v < 3; v++) {
+    const key = `t_road_${v}`;
+    tex(s, key, T, T, (g) => {
+      g.fillStyle(ASPHALT[0]).fillRect(0, 0, T, T);
+      speckle(g, key, [ASPHALT[1], 0x000000, 0xffffff], 30);
+    });
   }
   tex(s, 'g_floor', T, T, (g) => {
     g.fillStyle(0x6a5a4b).fillRect(0, 0, T, T);
@@ -52,6 +49,15 @@ export function makeTextures(s: Phaser.Scene) {
   });
   tex(s, 'g_road_v', T, T, (g) => { g.fillStyle(0xe0c341, 0.55).fillRect(T - 2, 6, 2, 20); });
   tex(s, 'g_road_h', T, T, (g) => { g.fillStyle(0xe0c341, 0.55).fillRect(6, T - 2, 20, 2); });
+  tex(s, 'g_sidewalk', T, T, (g) => {
+    g.fillStyle(0x8a8d93).fillRect(0, 0, T, T);
+    g.fillStyle(0x000000, 0.22).fillRect(15, 0, 1, T).fillRect(0, 15, T, 1);
+    g.fillStyle(0xffffff, 0.12).fillRect(0, 0, T, 1).fillRect(0, 0, 1, T);
+    speckle(g, 'g_sidewalk', [0xffffff, 0x000000], 12);
+  });
+  // zebra: dungi albe paralele cu sensul masinilor
+  tex(s, 'g_cross_v', T, T, (g) => { g.fillStyle(0xe8e8e8, 0.7); for (const x of [3, 14, 25]) g.fillRect(x, 5, 5, 22); });
+  tex(s, 'g_cross_h', T, T, (g) => { g.fillStyle(0xe8e8e8, 0.7); for (const y of [3, 14, 25]) g.fillRect(5, y, 22, 5); });
   tex(s, 'g_dirt', T, T, (g) => {
     g.fillStyle(0x7a6246).fillRect(0, 0, T, T);
     speckle(g, 'g_dirt', [0x9b7f5c, 0x4f3d29, 0xb59b78], 36);
