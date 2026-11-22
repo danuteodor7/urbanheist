@@ -39,6 +39,8 @@ import {
   distribute,
   quickEquip,
   refit,
+  saveRaidLayout,
+  savePending,
   iconSvg,
   snap,
   restore,
@@ -341,6 +343,14 @@ class RaidScene extends Phaser.Scene {
   private revealed = new WeakSet<Loot>(); // iteme deja deblocate (reveal)
   private reveal: { loot: Loot; t0: number; ms: number } | null = null;
   private fseq = 0;
+  private pend = new Set<Promise<unknown>>(); // consume_raid_item calls still running
+  private consume(id: number, qty: number) {
+    const p = rpcRetry("consume_raid_item", { p_item_id: id, p_qty: qty }, 3).then((r) => {
+      if (r.error) this.say(`Server error (item): ${r.error.message}`);
+    });
+    this.pend.add(p);
+    void p.finally(() => this.pend.delete(p));
+  }
   private healing: { it: Item; t0: number; ms: number; hp: number } | null =
     null;
   private onKey = (e: KeyboardEvent) => {
@@ -1296,11 +1306,7 @@ class RaidScene extends Phaser.Scene {
   // Itemele aduse din stash nu mai sunt ale tale dupa ce ajung in container / pe jos: se scad din baza de date (reiau drumul ca "gasite" daca le iei inapoi)
   private release(it: Item) {
     if (!it.found && +it.id > 0)
-      void rpcRetry(
-        "consume_raid_item",
-        { p_item_id: +it.id, p_qty: it.qty },
-        3,
-      );
+      this.consume(+it.id, it.qty);
   }
 
   // Item mutat din inventar in containerul deschis: devine loot normal, deja deblocat, vizibil si pentru ceilalti
@@ -1473,7 +1479,7 @@ class RaidScene extends Phaser.Scene {
     it.qty -= used;
     if (it.qty <= 0) box.items = box.items.filter((i) => i !== it);
     if (!it.found && used > 0)
-      void rpcRetry("consume_raid_item", { p_item_id: +it.id, p_qty: used }, 3);
+      this.consume(+it.id, used);
     this.inv?.render();
   }
 
@@ -2724,6 +2730,7 @@ class RaidScene extends Phaser.Scene {
     this.busy = true;
     this.closeInv();
     this.closeShop();
+    await Promise.all([...this.pend]); // every consumed item must be saved on the server before extracting
     // stack-urile mari se trimit in bucati de max MAX_STACK (limita pe rand din extract_player)
     let loot: Loot[] = this.packItems()
       .filter((i) => i.found && i.qty > 0)
@@ -2774,6 +2781,9 @@ class RaidScene extends Phaser.Scene {
     const full = data?.skipped_stash_full
       ? ` (${data.skipped_stash_full} lost: stash full)`
       : "";
+    const boxes = [this.B.bag, this.B.head, this.B.body, this.B.weapon, this.B.back];
+    saveRaidLayout(this.cfg.me.id, boxes);
+    if (loot.length) savePending(this.cfg.me.id, boxes);
     await this.net.send("gone", { id: this.cfg.me.id });
     await this.finish(
       `Extraction successful! +${xp} xp, ${loot.length} items saved${full}`,

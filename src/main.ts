@@ -10,6 +10,7 @@ import {
   distribute,
   fits,
   placeOverflow,
+  applyPending,
   quickEquip,
   refit,
   type Box,
@@ -267,6 +268,7 @@ async function showHub() {
     x: 0,
     y: 0,
   }));
+  const prefer = applyPending(uid!, list, [stash, B.bag, B.head, B.body, B.weapon, B.back]);
   distribute(
     defs,
     uid!,
@@ -274,6 +276,7 @@ async function showHub() {
     [stash, B.bag, B.head, B.body, B.weapon, B.back],
     stash,
     () => refit(defs, B.bag, B.back),
+    prefer,
   );
   const save = () =>
     saveLayout(uid!, [stash, B.bag, B.head, B.body, B.weapon, B.back]);

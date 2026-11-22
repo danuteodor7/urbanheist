@@ -96,6 +96,41 @@ export function clearLoadout(uid: string) {
   const l = loadLayout(uid);
   for (const k of Object.keys(l)) if (l[k].c !== 'stash') delete l[k];
   store(uid, l);
+  try { localStorage.removeItem(PK(uid)); } catch { /* ignored */ }
+}
+
+type Pending = { type: string; c: string; x: number; y: number; used?: boolean }[];
+const PK = (uid: string) => `uh:pending:${uid}`;
+
+// End of raid: remember where the brought items ended up
+export function saveRaidLayout(uid: string, boxes: Box[]) {
+  const l = loadLayout(uid);
+  for (const b of boxes) for (const it of b.items) if (!it.found) l[it.id] = { c: b.id, x: it.x, y: it.y };
+  store(uid, l);
+}
+// Looted items get new DB rows (new ids): remember their slots by type
+export function savePending(uid: string, boxes: Box[]) {
+  const p: Pending = boxes.flatMap((b) => b.items.filter((i) => i.found).map((i) => ({ type: i.type, c: b.id, x: i.x, y: i.y })));
+  try { localStorage.setItem(PK(uid), JSON.stringify(p)); } catch { /* ignored */ }
+}
+// Hub: match the new rows to the remembered slots (chunk rows of the same type prefer the same box)
+export function applyPending(uid: string, rows: { id: string; type: string }[], boxes: Box[]): Map<string, Box> {
+  const prefer = new Map<string, Box>();
+  let p: Pending = [];
+  try { p = JSON.parse(localStorage.getItem(PK(uid)) ?? '[]'); } catch { /* ignored */ }
+  try { localStorage.removeItem(PK(uid)); } catch { /* ignored */ }
+  if (!p.length) return prefer;
+  const l = loadLayout(uid);
+  for (const r of rows) {
+    if (l[r.id]) continue;
+    const e = p.find((q) => q.type === r.type && !q.used) ?? p.find((q) => q.type === r.type);
+    const b = e && boxes.find((x) => x.id === e.c);
+    if (!e || !b) continue;
+    prefer.set(r.id, b);
+    if (!e.used) { e.used = true; l[r.id] = { c: e.c, x: e.x, y: e.y }; }
+  }
+  store(uid, l);
+  return prefer;
 }
 // Item care nu mai incape in grila: sta sub ea, vizibil, pana il muti / vinzi. Gridul ramane fix: in randurile de sub `cap` nu se poate pune nimic nou.
 export function placeOverflow(defs: Map<string, Def>, b: Box, it: Item): boolean {
@@ -107,13 +142,15 @@ export function placeOverflow(defs: Map<string, Def>, b: Box, it: Item): boolean
   return ok;
 }
 // Pune fiecare item in cutia salvata; ce nu mai incape sau nu are pozitie merge in `fallback`
-export function distribute(defs: Map<string, Def>, uid: string, items: Item[], boxes: Box[], fallback: Box, after?: () => void) {
+export function distribute(defs: Map<string, Def>, uid: string, items: Item[], boxes: Box[], fallback: Box, after?: () => void, prefer?: Map<string, Box>) {
   const l = loadLayout(uid);
   // rucsacurile primele: dupa ce sunt echipate, gridul creste si restul itemelor isi gasesc locul
   const first = (it: Item) => (spec(it.type)?.slot === 'back' ? 0 : 1);
   for (const it of [...items].sort((a, b) => first(a) - first(b))) {
     const s = l[it.id], b = s && boxes.find((x) => x.id === s.c);
     if (b && fits(defs, b, it, s.x, s.y)) { Object.assign(it, { x: s.x, y: s.y }); b.items.push(it); after?.(); continue; }
+    const pb = prefer?.get(it.id);
+    if (pb && autoPlace(defs, pb, it)) { after?.(); continue; }
     if (!autoPlace(defs, fallback, it)) placeOverflow(defs, fallback, it);   // nu pierdem iteme din vedere, dar gridul nu creste
     after?.();
   }
@@ -129,7 +166,29 @@ const SLOT_POS: Record<string, string> = Object.fromEntries(
 );
 
 // Every item has its own illustration (see game/itemart.ts)
-export const iconSvg = itemArt;
+// Every distinct illustration is defined ONCE in a hidden sprite (<symbol>); each item in the grid is just <svg><use/></svg>.
+// Before: every item re-created dozens of <path>/<rect> nodes on every render; now it is a single node.
+const artIds = new Map<string, { id: string; vb: string }>();
+let sprite: SVGSVGElement | null = null;
+export function iconSvg(d: Def): string {
+  const key = `${d.item_type}|${d.rarity}|${d.name}`;
+  let a = artIds.get(key);
+  if (!a) {
+    const full = itemArt(d);
+    const m = full.match(/^<svg[^>]*viewBox="([^"]+)"[^>]*>([\s\S]*)<\/svg>$/);
+    if (!m) return full;
+    a = { id: `ia${artIds.size}`, vb: m[1] };
+    artIds.set(key, a);
+    if (!sprite) {
+      const t = document.createElement('div');
+      t.innerHTML = '<svg width="0" height="0" style="position:absolute" aria-hidden="true"></svg>';
+      sprite = t.firstElementChild as SVGSVGElement;
+      document.body.appendChild(sprite);
+    }
+    sprite.insertAdjacentHTML('beforeend', `<symbol id="${a.id}" viewBox="${a.vb}">${m[2]}</symbol>`);
+  }
+  return `<svg viewBox="${a.vb}" aria-hidden="true"><use href="#${a.id}"/></svg>`;
+}
 
 // Tooltip propriu (inlocuieste atributul title): titlu colorat dupa raritate, apoi liniile din tip()
 export function tipHtml(d: Def, qty: number): string {
@@ -139,8 +198,13 @@ export function tipHtml(d: Def, qty: number): string {
 let tipEl: HTMLDivElement | null = null;
 export function showTip(html: string, x: number, y: number) {
   if (!tipEl) { tipEl = document.createElement('div'); tipEl.className = 'tip'; document.body.appendChild(tipEl); }
-  tipEl.innerHTML = html;
+  if (html !== tipHtmlLast) { tipEl.innerHTML = html; tipHtmlLast = html; }
   tipEl.style.display = 'block';
+  moveTip(x, y);
+}
+let tipHtmlLast = '';
+export function moveTip(x: number, y: number) {
+  if (!tipEl) return;
   const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
   tipEl.style.left = `${Math.min(x + 16, window.innerWidth - w - 8)}px`;
   tipEl.style.top = `${Math.min(y + 16, window.innerHeight - h - 8)}px`;
@@ -155,6 +219,8 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
   const { defs } = hooks;
   const boxes = [...(left ? [left] : []), ...slots, bag];
   let drag: Drag | null = null;
+  let tipFor: HTMLElement | null = null;   // item under the tooltip (avoids rebuilding it on every mouse move)
+  let raf = 0, lastEv: PointerEvent | null = null, hlKey = '';
   let zone: HTMLDivElement | null = null;   // banner "arunca pe jos" cat timp tragi un item
 
   const itemHtml = (b: Box, it: Item) => {
@@ -165,7 +231,7 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     const named = w * h >= 3 || (w >= 2 && h >= 1 && w * h >= 2);
     // itemele nedeblocate nu poarta clasa de raritate: sunt gri, ca sa nu dea de gol ce sunt
     return `<div class="it ${hid ? 'hid' : `r-${def.rarity}`}${hooks.selected?.(it) ? ' sel' : ''}" data-it="${esc(it.id)}" data-box="${b.id}" style="left:${x}px;top:${y}px;width:${w * C}px;height:${h * C}px">
-      ${hid ? '<span class="q">?</span><i class="pg"></i>' : `${itemArt(def)}${named ? `<span class="nm">${esc(def.name)}</span>` : ''}${it.qty > 1 ? `<b>${it.qty}</b>` : ''}`}</div>`;
+      ${hid ? '<span class="q">?</span><i class="pg"></i>' : `${iconSvg(def)}${named ? `<span class="nm">${esc(def.name)}</span>` : ''}${it.qty > 1 ? `<b>${it.qty}</b>` : ''}`}</div>`;
   };
   const boxHtml = (b: Box) => {
     // grila cu `grow` (container, sau stash-ul cand are iteme peste capacitate) se mareste exact cat are nevoie, fara rand in plus
@@ -190,30 +256,46 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     root.style.minHeight = '';
   };
 
-  const move = (e: PointerEvent) => {
+  const probe = (e: PointerEvent) => {
     const d = drag!;
-    d.el.style.left = `${e.clientX - d.dx}px`;
-    d.el.style.top = `${e.clientY - d.dy}px`;
-    d.hl.remove();
-    d.over = null;
     const stack = document.elementsFromPoint(e.clientX, e.clientY);
-    d.out = !!hooks.ground && !stack.some((n) => n.classList.contains('pn'));   // in afara oricarui panou = pe jos
-    d.el.classList.toggle('tossing', d.out);
-    zone?.classList.toggle('hot', d.out);
+    const out = !!hooks.ground && !stack.some((n) => n.classList.contains('pn'));   // outside every panel = on the ground
+    if (out !== d.out) {
+      d.out = out;
+      d.el.classList.toggle('tossing', out);
+      zone?.classList.toggle('hot', out);
+    }
     const hit = stack.find((n) => n.classList.contains('box')) as HTMLElement | undefined;
     const b = hit && boxes.find((x) => x.id === hit.dataset.box);
-    if (!hit || !b) return;
+    if (!hit || !b) {
+      if (hlKey) { d.hl.remove(); hlKey = ''; }
+      d.over = null;
+      return;
+    }
     const r0 = hit.getBoundingClientRect();
     const x = Math.round((e.clientX - d.dx - r0.left) / C), y = Math.round((e.clientY - d.dy - r0.top) / C);
     const ok = fits(defs, b, d.it, x, y) && (!b.readonly || b === d.from);
+    d.over = ok ? { b, x, y } : null;
+    const k = `${b.id}:${b.slot ? 0 : x}:${b.slot ? 0 : y}:${ok}`;
+    if (k === hlKey) return;   // same target as the previous frame: no DOM work
+    hlKey = k;
     const [w, h] = dims(defs.get(d.it.type)!);
     d.hl.className = `hl ${ok ? 'ok' : 'no'}`;
     d.hl.style.cssText = b.slot ? `left:0;top:0;width:${b.w * C}px;height:${b.h * C}px` : `left:${x * C}px;top:${y * C}px;width:${w * C}px;height:${h * C}px`;
     hit.appendChild(d.hl);
-    if (ok) d.over = { b, x, y };
+  };
+
+  const move = (e: PointerEvent) => {
+    const d = drag!;
+    lastEv = e;
+    d.el.style.left = `${e.clientX - d.dx}px`;
+    d.el.style.top = `${e.clientY - d.dy}px`;
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (drag && lastEv) probe(lastEv); });
   };
 
   const stop = () => {
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    lastEv = null; hlKey = '';
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
     drag?.el.remove();
@@ -224,6 +306,7 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
   };
 
   function up() {
+    if (raf) { cancelAnimationFrame(raf); raf = 0; if (lastEv) probe(lastEv); }   // flush the pending hit-test
     const d = drag!;
     const o = d.over, out = d.out;
     stop();
@@ -291,11 +374,13 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
 
   root.addEventListener('mousemove', (e) => {
     const el = drag ? null : (e.target as HTMLElement).closest<HTMLElement>('.it');
-    if (!el || el.classList.contains('hid')) return hideTip();
+    if (!el || el.classList.contains('hid')) { tipFor = null; return hideTip(); }
+    if (el === tipFor) return moveTip(e.clientX, e.clientY);   // same item: only reposition
+    tipFor = el;
     const { it } = find(el);
     showTip(tipHtml(defs.get(it.type)!, it.qty), e.clientX, e.clientY);
   });
-  root.addEventListener('mouseleave', hideTip);
+  root.addEventListener('mouseleave', () => { tipFor = null; hideTip(); });
 
 
   render();

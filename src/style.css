@@ -91,8 +91,9 @@ input:focus { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(255, 180, 0
 .btn.ghost:hover { color: var(--bone); --bg: rgba(255, 255, 255, 0.05); }
 .btn.big {
   position: relative; isolation: isolate; padding: 17px 44px; font-size: 24px; letter-spacing: 3px; color: #16110a; box-shadow: none;
-  background: var(--tape); background-size: 36px 36px; animation: tape 1.6s linear infinite;
+  background: var(--tape); background-size: 36px 36px;
 }
+.btn.big:hover { animation: tape 1.6s linear infinite; }   /* animates only on hover */
 .btn.big::before { content: ''; position: absolute; inset: 4px; background: var(--amber); clip-path: var(--chamfer); z-index: -1; }
 .btn.big:hover::before { background: #ffc42e; }
 @keyframes tape { to { background-position: 36px 0; } }
@@ -170,13 +171,13 @@ input:focus { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(255, 180, 0
   user-select: none; touch-action: none; color: var(--rc);
   background: linear-gradient(155deg, color-mix(in srgb, var(--rc) 34%, #14181d), color-mix(in srgb, var(--rc) 12%, #0e1114));
   box-shadow: inset 0 0 12px color-mix(in srgb, var(--rc) 22%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.5);
-  transition: filter 0.12s, box-shadow 0.12s;
+  contain: layout paint style;   /* each item is its own paint island: a hover / move does not repaint the whole grid */
 }
-.it:hover { filter: brightness(1.25); box-shadow: inset 0 0 14px color-mix(in srgb, var(--rc) 40%, transparent), 0 0 10px color-mix(in srgb, var(--rc) 45%, transparent); }
+.it:hover { box-shadow: inset 0 0 14px color-mix(in srgb, var(--rc) 55%, transparent), 0 0 0 1px var(--rc); }
 .it::before, .it::after { content: ''; position: absolute; width: 5px; height: 5px; border: 0 solid var(--rc); opacity: 0.8; }
 .it::before { left: 2px; top: 2px; border-width: 1px 0 0 1px; }
 .it::after { right: 2px; bottom: 2px; border-width: 0 1px 1px 0; }
-.it svg { width: 100%; height: 100%; padding: 3px; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7)); }
+.it svg { width: 100%; height: 100%; padding: 3px; }   /* no drop-shadow filter: it was recomputed for every item */
 .it .nm { position: absolute; left: 4px; top: 2px; right: 4px; font: 600 11px/1.1 var(--display); letter-spacing: 0.6px; color: var(--bone); text-align: left; text-transform: uppercase; text-shadow: 0 1px 2px #000; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .it b { position: absolute; right: 4px; bottom: 2px; font: 700 13px/1 var(--display); color: var(--bone); text-shadow: 0 1px 2px #000; }
 .it.hid { --rc: #7d838d; cursor: default; filter: saturate(0.25) brightness(0.85); }
@@ -184,8 +185,7 @@ input:focus { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(255, 180, 0
 .it .pg { position: absolute; left: 0; bottom: 0; height: 4px; width: calc(var(--p, 0) * 100%); background: var(--amber); }
 .it .q { font: 700 22px var(--display); color: var(--muted); }
 .r-common { --rc: #a3a8ae; } .r-uncommon { --rc: #4cc26b; } .r-rare { --rc: #3d97ee; } .r-epic { --rc: #b45cd0; } .r-legendary { --rc: #ff9a1f; }
-.it.r-legendary:not(.hid) { animation: glow 2.4s ease-in-out infinite alternate; }
-@keyframes glow { to { box-shadow: inset 0 0 14px color-mix(in srgb, var(--rc) 45%, transparent), 0 0 12px color-mix(in srgb, var(--rc) 50%, transparent); } }
+.it.r-legendary:not(.hid) { box-shadow: inset 0 0 14px color-mix(in srgb, var(--rc) 45%, transparent), 0 0 8px color-mix(in srgb, var(--rc) 40%, transparent); }   /* static: an infinite animation on many items repainted constantly */
 /* mini efect cand un item din container se deblocheaza (dupa regula legendarelor, ca sa o suprascrie) */
 .it.pop, .it.r-legendary.pop { animation: unlock 0.55s ease-out; }
 @keyframes unlock {
