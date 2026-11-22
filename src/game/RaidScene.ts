@@ -29,6 +29,8 @@ import {
   type Def,
   type Item,
   type Gun,
+  BUY_MULT,
+  stackMax,
 } from "./items.ts";
 import {
   mkBoxes,
@@ -133,7 +135,6 @@ const DIRS = Array.from({ length: RAYS }, (_, i) => ({
 
 const MS = 2; // minimap: px per tile
 // Magazine: pretul de cumparare = pretul de vanzare (base_value) x BUY_MULT; fara base_value se foloseste pretul pe raritate
-const BUY_MULT = 3;
 const FALLBACK_PRICE: Record<string, number> = {
   common: 40,
   uncommon: 100,
@@ -152,10 +153,10 @@ const XP: Record<string, number> = {
 };
 const mid = (t: number) => t * TILE + TILE / 2;
 const LOCK_TINT: Record<string, number> = {
-  Depozit: 0xffb74d,
-  Banca: 0x64b5f6,
-  Casa: 0x81c784,
-  Magazin: 0xba68c8,
+  Warehouse: 0xffb74d,
+  Bank: 0x64b5f6,
+  House: 0x81c784,
+  Shop: 0xba68c8,
 };
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -396,7 +397,6 @@ class RaidScene extends Phaser.Scene {
         qty: b.quantity,
         x: 0,
         y: 0,
-        r: false,
       })),
       [B.bag, B.head, B.body, B.weapon, B.back],
       B.bag,
@@ -410,7 +410,7 @@ class RaidScene extends Phaser.Scene {
       onMove: (it, from, to) => {
         if (from !== this.chest) return true; // bag -> container / sloturi / jos: permis
         if (!to) {
-          this.say("Itemele din container se iau in inventar, nu se arunca");
+          this.say("Container items go to your inventory, they can't be thrown");
           return false;
         }
         if (to === this.chest) return true;
@@ -599,7 +599,7 @@ class RaidScene extends Phaser.Scene {
       car: (m) => this.onCar(m),
     });
     void this.net.join().then((ok) => {
-      if (!ok) return this.say("Fara conexiune multiplayer: joci solo");
+      if (!ok) return this.say("No multiplayer connection: playing solo");
       void this.net.send("hello", { id: me.id });
       this.sendPos(this.time.now, true);
     });
@@ -653,7 +653,7 @@ class RaidScene extends Phaser.Scene {
         !this.openChest() &&
         !this.tryCar()
       )
-        this.say("Nu e nimic de cautat aici");
+        this.say("Nothing to search here");
     }
     if (jH && !lock) this.quickHeal();
     if (jR && !lock && !this.inv && !this.shop) this.startReload();
@@ -976,7 +976,7 @@ class RaidScene extends Phaser.Scene {
     h.hp.style.width = `${Math.max(0, (100 * this.hp) / HP_MAX)}%`;
     h.hp.parentElement!.classList.toggle("low", this.hp <= 30);
     h.hpt.textContent = String(Math.ceil(this.hp));
-    h.arm.textContent = arm ? `Armura ${arm}%` : "Fara armura";
+    h.arm.textContent = arm ? `Armor ${arm}%` : "No armor";
     h.arm.classList.toggle("on", arm > 0);
     h.money.textContent = `$${this.money}`;
   }
@@ -1041,7 +1041,7 @@ class RaidScene extends Phaser.Scene {
     const ov = document.createElement("div");
     ov.className = "invov";
     ov.innerHTML =
-      '<div class="invst"></div><div class="invroot"></div><div class="invhint"><kbd>Trage</kbd> intre grile (si inapoi in container) · <kbd>Clic dreapta</kbd> echipeaza / ia / foloseste · <kbd>R</kbd> roteste · trage <b>in afara panourilor</b> ca sa arunci pe jos · <kbd>Tab</kbd> / <kbd>Esc</kbd> inchide</div>';
+      '<div class="invst"></div><div class="invroot"></div><div class="invhint"><kbd>Drag</kbd> between grids (and back into the container) · <kbd>Right-click</kbd> equip / take / use · drag <b>outside the panels</b> to drop on the ground · <kbd>Tab</kbd> / <kbd>Esc</kbd> close</div>';
     ov.addEventListener("contextmenu", (e) => e.preventDefault());
     this.cfg.parent.appendChild(ov);
     this.ov = ov;
@@ -1050,7 +1050,7 @@ class RaidScene extends Phaser.Scene {
       this.chestC = c;
       this.chest = {
         id: "chest",
-        title: this.isDrop(c) ? "Pe jos / cadavru" : "Container",
+        title: this.isDrop(c) ? "On the ground / corpse" : "Container",
         w: 6,
         h: 1,
         items: [],
@@ -1107,7 +1107,6 @@ class RaidScene extends Phaser.Scene {
         qty: l.quantity,
         x: 0,
         y: 0,
-        r: false,
       };
       this.lootOf.set(it.id, l);
       if (this.isDrop(c)) this.revealed.add(l);
@@ -1125,7 +1124,7 @@ class RaidScene extends Phaser.Scene {
       if (this.ovStatus)
         this.ovStatus.textContent = c.items.length
           ? ""
-          : "Container gol · trage iteme aici ca sa le lasi";
+          : "Container empty · drag items here to leave them";
       return;
     }
     if (this.reveal?.loot !== next)
@@ -1146,7 +1145,7 @@ class RaidScene extends Phaser.Scene {
           ?.querySelector<HTMLElement>(sel)
           ?.style.setProperty("--p", String(f));
       if (this.ovStatus)
-        this.ovStatus.textContent = `Se deblocheaza... ${Math.round(f * 100)}%`;
+        this.ovStatus.textContent = `Unlocking... ${Math.round(f * 100)}%`;
     }
   }
 
@@ -1154,16 +1153,31 @@ class RaidScene extends Phaser.Scene {
   private checkTake(it: Item): string | null {
     const l = this.lootOf.get(it.id);
     return !l || !this.revealed.has(l)
-      ? "Itemul nu a fost deblocat inca"
+      ? "Item not unlocked yet"
       : null;
   }
 
-  private findStack(it: Item) {
-    return this.defs.get(it.type)!.stackable
-      ? this.packItems().find(
-          (i) => i.found && i.type === it.type && i.qty < MAX_STACK,
-        )
-      : undefined;
+  // Cat loc liber e in stack-urile existente (doar iteme gasite in raid; cele aduse din stash nu se amesteca cu ele)
+  private stackFree(it: Item) {
+    const max = stackMax(this.defs.get(it.type)!);
+    if (max <= 1) return 0;
+    return this.packItems()
+      .filter((i) => i !== it && i.found && i.type === it.type)
+      .reduce((n, i) => n + Math.max(0, max - i.qty), 0);
+  }
+
+  // Umple stack-urile existente; ce ramane ramane in `it` (qty redus). true = a intrat tot si `it` dispare.
+  private mergeInto(it: Item): boolean {
+    const max = stackMax(this.defs.get(it.type)!);
+    if (max <= 1) return false;
+    for (const s of this.packItems()) {
+      if (s === it || !s.found || s.type !== it.type || s.qty >= max) continue;
+      const n = Math.min(max - s.qty, it.qty);
+      s.qty += n;
+      it.qty -= n;
+      if (it.qty <= 0) return true;
+    }
+    return false;
   }
 
   // Itemul a intrat in rucsac: scoate loot-ul din container, anunta ceilalti. Returneaza true daca s-a combinat cu un stack existent.
@@ -1172,16 +1186,16 @@ class RaidScene extends Phaser.Scene {
       loot = this.lootOf.get(it.id)!,
       def = this.defs.get(it.type)!;
     c.items = c.items.filter((l) => l !== loot);
-    const same = this.findStack(it);
-    if (same) same.qty = Math.min(MAX_STACK, same.qty + it.qty);
-    else it.found = true;
+    const qty0 = it.qty;
+    const eaten = this.mergeInto(it);
+    if (!eaten) it.found = true;
     this.xp = Math.min(MAX_XP, this.xp + (XP[def.rarity] ?? 0));
     const k = this.ids.get(c)!;
     this.touched.add(k);
     this.recolor(c);
     void this.net.send("looted", {
       k,
-      taken: [{ item_type: it.type, quantity: it.qty }],
+      taken: [{ item_type: it.type, quantity: qty0 }],
     } satisfies LootedMsg);
     if (def.rarity === "legendary") {
       const q = this.cpos(c);
@@ -1189,7 +1203,7 @@ class RaidScene extends Phaser.Scene {
       this.onAlarm(a);
       void this.net.send("alarm", a);
     }
-    return !!same;
+    return eaten;
   }
 
   // Clic dreapta
@@ -1199,13 +1213,13 @@ class RaidScene extends Phaser.Scene {
       if (spec(it.type)?.slot) return this.equipFromChest(it); // rucsac / casca / vesta / arma: se echipeaza direct
       const err = this.checkTake(it);
       if (err) return this.say(err);
-      const merge = !!this.findStack(it),
-        saved = { x: it.x, y: it.y, r: it.r };
+      const full = this.stackFree(it) >= it.qty,
+        saved = { x: it.x, y: it.y };
       from.items = from.items.filter((i) => i !== it);
-      if (!merge && !autoPlace(this.defs, B.bag, it)) {
+      if (!full && !autoPlace(this.defs, B.bag, it)) {
         from.items.push(it);
         Object.assign(it, saved);
-        return this.say("Nu incape in inventar");
+        return this.say("Not enough room in inventory");
       }
       this.commitTake(it);
       return;
@@ -1222,7 +1236,7 @@ class RaidScene extends Phaser.Scene {
         )
       )
         this.sendPos(this.time.now, true);
-      else this.say("Nu se poate echipa / nu incape in inventar");
+      else this.say("Can't equip / no room in inventory");
     }
   }
 
@@ -1239,7 +1253,7 @@ class RaidScene extends Phaser.Scene {
     const before = snap([B.bag, B.head, B.body, B.weapon, B.back, ch]);
     const prev = to.items[0];
     ch.items = ch.items.filter((i) => i !== it);
-    Object.assign(it, { x: 0, y: 0, r: false });
+    Object.assign(it, { x: 0, y: 0 });
     to.items = [it];
     const err = refit(this.defs, B.bag, B.back);
     if (err) {
@@ -1269,10 +1283,10 @@ class RaidScene extends Phaser.Scene {
   private async askAbandon() {
     if (
       await this.ask({
-        title: "Abandonezi raidul?",
-        text: "Pierzi tot echipamentul adus la risc; ce ai asupra ta ramane pe jos.",
-        ok: "Abandoneaza",
-        cancel: "Continua raidul",
+        title: "Abandon the raid?",
+        text: "You lose all the gear you brought into the raid; what you carry stays on the ground.",
+        ok: "Abandon",
+        cancel: "Keep raiding",
         danger: true,
       })
     )
@@ -1302,7 +1316,7 @@ class RaidScene extends Phaser.Scene {
     this.touched.add(k);
     this.recolor(c);
     void this.net.send("put", { k, added: [{ ...loot }] } satisfies PutMsg);
-    this.say(`Ai pus ${this.defs.get(it.type)!.name} in container`);
+    this.say(`You put ${this.defs.get(it.type)!.name} in the container`);
   }
 
   // Item tras in afara panourilor: cade pe jos. Daca e deja un drop in apropiere, se adauga acolo.
@@ -1335,7 +1349,7 @@ class RaidScene extends Phaser.Scene {
       this.addDrop(m);
       void this.net.send("drop", m);
     }
-    this.say(`Ai aruncat ${this.defs.get(it.type)!.name}`);
+    this.say(`You dropped ${this.defs.get(it.type)!.name}`);
   }
 
   // Alt jucator a pus iteme intr-un container / drop
@@ -1372,13 +1386,13 @@ class RaidScene extends Phaser.Scene {
   private startReload() {
     if (this.reloading || this.driving) return;
     const g = this.gun();
-    if (this.magNow() >= g.mag) return this.say("Incarcator plin");
+    if (this.magNow() >= g.mag) return this.say("Magazine full");
     if (this.reserve(g) <= 0)
       return this.say(
-        `Nu ai gloante (${this.defs.get(g.ammo!)?.name ?? g.ammo}) in inventar`,
+        `No ammo (${this.defs.get(g.ammo!)?.name ?? g.ammo}) in inventory`,
       );
     this.reloading = { t0: this.time.now, ms: g.reload, key: this.wkey() };
-    this.say("Reincarc...");
+    this.say("Reloading...");
   }
 
   private tickReload(now: number) {
@@ -1396,7 +1410,7 @@ class RaidScene extends Phaser.Scene {
     if (need <= 0) return;
     if (g.ammo) this.takeAmmo(g.ammo, need);
     this.mag.set(r.key, have + need);
-    this.say(`Incarcator ${have + need}/${g.mag}`);
+    this.say(`Magazine ${have + need}/${g.mag}`);
   }
 
   private takeAmmo(type: string, n: number) {
@@ -1412,9 +1426,9 @@ class RaidScene extends Phaser.Scene {
   private startHeal(it: Item) {
     const h = spec(it.type)?.heal;
     if (!h || this.healing) return;
-    if (this.hp >= HP_MAX) return this.say("Viata e deja plina");
+    if (this.hp >= HP_MAX) return this.say("Health is already full");
     this.healing = { it, t0: this.time.now, ms: h.ms, hp: h.hp };
-    this.say(`Folosesti ${this.defs.get(it.type)!.name}...`);
+    this.say(`Using ${this.defs.get(it.type)!.name}...`);
   }
 
   // H: cel mai mic heal care acopera ce lipseste, altfel cel mai mare
@@ -1426,7 +1440,7 @@ class RaidScene extends Phaser.Scene {
     const it =
       hs.find((i) => spec(i.type)!.heal!.hp >= miss) ?? hs[hs.length - 1];
     if (it) this.startHeal(it);
-    else this.say("Nu ai nimic de folosit pentru heal");
+    else this.say("You have nothing to heal with");
   }
 
   private tickHeal(now: number) {
@@ -1543,13 +1557,13 @@ class RaidScene extends Phaser.Scene {
         <div class="sic r-${d.rarity}">${iconSvg(d)}</div>
         <div class="sin"><b>${esc(d.name)}${qty > 1 ? ` x${qty}` : ""}</b><em>${esc(head)}</em><div class="chips">${chips}</div></div>
         <div class="sp">$${price}</div>
-        <button class="btn primary" data-t="${esc(d.item_type)}"${poor || this.buying ? " disabled" : ""}>Cumpara</button></div>`;
+        <button class="btn primary" data-t="${esc(d.item_type)}"${poor || this.buying ? " disabled" : ""}>Buy</button></div>`;
       })
       .join("");
     sh.el.innerHTML = `<div class="shop" style="--tone:${info.hex}">
       <div class="shh"><h3>${info.name}</h3><span class="shm">$${this.money}</span></div>
-      <div class="shl">${rows || '<p class="ssub">Nimic de vanzare aici (lipsesc itemele din baza de date).</p>'}</div>
-      <div class="invhint"><kbd>Tab</kbd> inventar · <kbd>E</kbd> / <kbd>Esc</kbd> inchide · platesti din banii contului, itemul intra direct in inventar</div></div>`;
+      <div class="shl">${rows || '<p class="ssub">Nothing for sale here (items missing from the database).</p>'}</div>
+      <div class="invhint"><kbd>Tab</kbd> inventory · <kbd>E</kbd> / <kbd>Esc</kbd> close · you pay from your account money, the item goes straight to your inventory</div></div>`;
     const list = sh.el.querySelector(".shl");
     if (list) list.scrollTop = keep;
   }
@@ -1560,17 +1574,17 @@ class RaidScene extends Phaser.Scene {
     if (!d || this.buying || !this.shop) return;
     const { qty, price } = this.offer(d),
       B = this.B;
-    if (this.money < price) return this.say("Nu ai destui bani");
+    if (this.money < price) return this.say("Not enough money");
     const it: Item = {
       id: `B${this.fseq++}`,
       type,
       qty,
       x: 0,
       y: 0,
-      r: false,
       found: true,
     };
     const slot = spec(type)?.slot;
+    const before = snap([B.bag, B.head, B.body, B.weapon, B.back]);
     const toBack = slot === "back" && !B.back.items.length;
     if (toBack) {
       B.back.items.push(it);
@@ -1579,8 +1593,11 @@ class RaidScene extends Phaser.Scene {
         B.back.items = [];
         return this.say(err);
       }
-    } else if (!autoPlace(this.defs, B.bag, it))
-      return this.say("Nu incape in inventar");
+    } else {
+      if (this.stackFree(it) < it.qty && !autoPlace(this.defs, B.bag, it))
+        return this.say("Not enough room in inventory");
+      this.mergeInto(it); // gloantele cumparate completeaza stack-urile existente
+    }
 
     this.buying = true;
     this.renderShop();
@@ -1591,15 +1608,14 @@ class RaidScene extends Phaser.Scene {
     );
     this.buying = false;
     if (error) {
-      for (const b of [B.bag, B.head, B.body, B.weapon, B.back])
-        b.items = b.items.filter((i) => i !== it);
+      restore(before);
       refit(this.defs, B.bag, B.back);
       this.renderShop();
       return this.say(
         /function|schema cache|could not find/i.test(error.message)
-          ? "Magazinul nu e activ: ruleaza supabase/shop.sql in Supabase"
+          ? "The shop is not active: run supabase/shop.sql in Supabase"
           : /enough|insufficient/i.test(error.message)
-            ? "Nu ai destui bani"
+            ? "Not enough money"
             : error.message,
       );
     }
@@ -1614,7 +1630,7 @@ class RaidScene extends Phaser.Scene {
         B.bag,
       );
     this.sendPos(this.time.now, true);
-    this.say(`Ai cumparat ${d.name}${qty > 1 ? ` x${qty}` : ""}`);
+    this.say(`You bought ${d.name}${qty > 1 ? ` x${qty}` : ""}`);
     this.renderShop();
     this.inv?.render();
   }
@@ -1633,14 +1649,14 @@ class RaidScene extends Phaser.Scene {
     if (!key) {
       const need =
         [...this.defs.values()].find((d) => spec(d.item_type)?.door === o.l.key)
-          ?.name ?? "o cheie";
-      this.say(`Incuiat: ${o.l.key} (necesita ${need})`);
+          ?.name ?? "a key";
+      this.say(`Locked: ${o.l.key} (requires ${need})`);
       return true;
     }
     this.consumeN(key, 1);
     this.setOpen(o.l.id, true);
     void this.net.send("door", { id: o.l.id } satisfies DoorMsg);
-    this.say(`Ai deschis: ${o.l.key}`);
+    this.say(`You unlocked: ${o.l.key}`);
     return true;
   }
 
@@ -1689,7 +1705,7 @@ class RaidScene extends Phaser.Scene {
     if (!c || Phaser.Math.Distance.Between(p.x, p.y, c.dx, c.dy) > REACH + 20)
       return false;
     this.stealing = { c, t0: this.time.now };
-    this.say("Furi masina...");
+    this.say("Hotwiring the car...");
     return true;
   }
 
@@ -1704,7 +1720,7 @@ class RaidScene extends Phaser.Scene {
     );
     if (d > REACH + 40 || s.c.d) {
       this.stealing = null;
-      return this.say("Ai renuntat");
+      return this.say("You gave up");
     }
     if (now - s.t0 >= STEAL_MS) {
       this.stealing = null;
@@ -1714,7 +1730,7 @@ class RaidScene extends Phaser.Scene {
   }
 
   private enterCar(c: Car) {
-    if (c.d) return this.say("Masina e ocupata");
+    if (c.d) return this.say("The car is occupied");
     this.closeInv();
     this.healing = null;
     this.reloading = null;
@@ -1731,7 +1747,7 @@ class RaidScene extends Phaser.Scene {
     body.reset(c.x, c.y);
     p.setVisible(false);
     this.lastCar = { v: 0, w: 0, t: 0 };
-    this.say("Conduci: W/S gaz-frana, A/D directie, E coboara");
+    this.say("Driving: W/S gas-brake, A/D steer, E exit");
     this.sendCar(this.time.now, true);
     this.sendPos(this.time.now, true);
   }
@@ -1769,7 +1785,7 @@ class RaidScene extends Phaser.Scene {
     p.setVisible(true);
     void this.net.send("car", this.carMsg(c));
     this.sendPos(this.time.now, true);
-    if (!silent) this.say("Ai coborat din masina");
+    if (!silent) this.say("You got out of the car");
   }
 
   // Miscarea masinii: viteza scalara + directie; coliziunea cu peretii o face fizica Arcade (corpul jucatorului e mai mare in masina)
@@ -2356,20 +2372,20 @@ class RaidScene extends Phaser.Scene {
 
   // ---------- moarte / drop ----------
   private onDead(m: DeadMsg) {
-    const name = m.n ?? this.remotes.get(m.id)?.n ?? "Jucator";
+    const name = m.n ?? this.remotes.get(m.id)?.n ?? "Player";
     this.removeRemote(m.id);
     if (m.id === this.cfg.me.id) return;
     this.addCorpse(m.x, m.y, name);
     this.addDrop(m);
     const killer = m.by
       ? m.by === this.cfg.me.id
-        ? "tine"
-        : (this.remotes.get(m.by)?.n ?? "cineva")
+        ? "you"
+        : (this.remotes.get(m.by)?.n ?? "someone")
       : null;
     this.say(
-      killer === "tine"
-        ? "Ai eliminat un jucator! Cauta-i loot-ul (E)"
-        : "Un jucator a murit: loot-ul e pe jos (E)",
+      killer === "you"
+        ? "You eliminated a player! Search their loot (E)"
+        : "A player died: their loot is on the ground (E)",
     );
   }
 
@@ -2592,7 +2608,7 @@ class RaidScene extends Phaser.Scene {
   }
 
   private onAlarm(m: AlarmMsg) {
-    this.say("ALARMA! Cineva a luat un item legendar");
+    this.say("ALARM! Someone took a legendary item");
     for (const b of this.bots.values()) {
       if (Math.hypot(b.x - m.x, b.y - m.y) < ALARM_R)
         b.go = { x: m.x, y: m.y, until: this.time.now + 20000 };
@@ -2648,7 +2664,7 @@ class RaidScene extends Phaser.Scene {
       if (!near) this.setOpen(id, false);
     }
     if (this.chestC) this.refreshChest(this.chestC);
-    this.say("Loot resetat in tot orasul!");
+    this.say("Loot reset across the city!");
   }
 
   // ---------- finalul raidului ----------
@@ -2691,16 +2707,16 @@ class RaidScene extends Phaser.Scene {
     );
     if (error && !error.message.includes("not in raid")) {
       // retea cazuta: hub-ul arata ecranul de recuperare (reintra / abandoneaza) in loc sa te blocheze in bucla
-      return this.finish(`Eroare de retea la iesire (${error.message}).`, true);
+      return this.finish(`Network error on exit (${error.message}).`, true);
     }
     const lost = error ? 0 : data;
-    const who = by ? ` de ${this.remotes.get(by)?.n ?? "un jucator"}` : "";
+    const who = by ? ` by ${this.remotes.get(by)?.n ?? "a player"}` : "";
     await this.finish(
       error
-        ? "Raid-ul se terminase deja."
+        ? "The raid had already ended."
         : abandoned
-          ? `Ai abandonat. Ai pierdut ${lost} iteme.`
-          : `Ai fost eliminat${who}. Ai pierdut ${lost} iteme.`,
+          ? `You abandoned the raid. You lost ${lost} items.`
+          : `You were eliminated${who}. You lost ${lost} items.`,
     );
   }
 
@@ -2728,10 +2744,10 @@ class RaidScene extends Phaser.Scene {
       error &&
       /limit|exceed/i.test(error.message) &&
       (await this.ask({
-        title: "Serverul refuza loot-ul",
-        text: "Limita din functia SQL extract_player a respins itemele gasite. Poti extrage doar cu itemele aduse; loot-ul gasit in acest raid se pierde.",
-        ok: "Extrage fara loot",
-        cancel: "Ramai in raid",
+        title: "The server rejected the loot",
+        text: "The limit in the SQL function extract_player rejected the items you found. You can only extract with the items you brought; the loot found in this raid is lost.",
+        ok: "Extract without loot",
+        cancel: "Stay in the raid",
         danger: true,
       }))
     ) {
@@ -2745,22 +2761,22 @@ class RaidScene extends Phaser.Scene {
     }
     if (error) {
       if (error.message.includes("not in raid"))
-        return this.finish("Raid-ul se terminase deja.");
+        return this.finish("The raid had already ended.");
       this.busy = false;
       this.extractMs = 0;
       this.blockedUntil = this.time.now + 4000;
       return this.say(
         error.message.includes("not extractable")
-          ? "Extractia se deschide la 60s dupa intrare"
+          ? "Extraction opens 60s after entering"
           : error.message,
       );
     }
     const full = data?.skipped_stash_full
-      ? ` (${data.skipped_stash_full} pierdute: stash plin)`
+      ? ` (${data.skipped_stash_full} lost: stash full)`
       : "";
     await this.net.send("gone", { id: this.cfg.me.id });
     await this.finish(
-      `Extractie reusita! +${xp} xp, ${loot.length} iteme salvate${full}`,
+      `Extraction successful! +${xp} xp, ${loot.length} items saved${full}`,
     );
   }
 }
@@ -2784,13 +2800,13 @@ export async function runRaid(
     ]);
   } catch (e) {
     return end(
-      `Nu pot incarca raidul: ${String((e as Error)?.message ?? e)}`,
+      `Cannot load the raid: ${String((e as Error)?.message ?? e)}`,
       true,
     );
   }
   if (!defs.data || !brought.data)
     return end(
-      defs.error?.message ?? brought.error?.message ?? "Nu pot incarca raidul",
+      defs.error?.message ?? brought.error?.message ?? "Cannot load the raid",
       true,
     );
 

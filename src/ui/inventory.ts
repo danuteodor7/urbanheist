@@ -1,4 +1,5 @@
 import { BASE_BAG, dims, spec, tip, type Def, type Item, type Slot } from '../game/items.ts';
+import { itemArt } from '../game/itemart.ts';
 
 // Un Box e fie un grid de celule (stash, rucsac, container), fie un slot de echipament (un singur item, `slot` = ce accepta)
 export type Box = { id: string; title: string; w: number; h: number; items: Item[]; slot?: Slot; grow?: boolean; cap?: number; readonly?: boolean };   // cap = cate randuri se pot FOLOSI (stash: mai putine decat se vad, daca au ramas iteme peste limita)
@@ -19,19 +20,19 @@ export type Hooks = {
 export const C = 38;   // px per celula
 
 export const mkBoxes = () => ({
-  bag: { id: 'bag', title: 'Inventar', w: BASE_BAG.w, h: BASE_BAG.h, items: [] } as Box,
-  back: { id: 'back', title: 'Rucsac', w: 4, h: 4, slot: 'back', items: [] } as Box,
-  head: { id: 'head', title: 'Casca', w: 2, h: 2, slot: 'head', items: [] } as Box,
-  body: { id: 'body', title: 'Vesta', w: 4, h: 4, slot: 'body', items: [] } as Box,
-  weapon: { id: 'weapon', title: 'Arma', w: 6, h: 2, slot: 'weapon', items: [] } as Box,
+  bag: { id: 'bag', title: 'Inventory', w: BASE_BAG.w, h: BASE_BAG.h, items: [] } as Box,
+  back: { id: 'back', title: 'Backpack', w: 4, h: 4, slot: 'back', items: [] } as Box,
+  head: { id: 'head', title: 'Helmet', w: 2, h: 2, slot: 'head', items: [] } as Box,
+  body: { id: 'body', title: 'Vest', w: 4, h: 4, slot: 'body', items: [] } as Box,
+  weapon: { id: 'weapon', title: 'Weapon', w: 6, h: 2, slot: 'weapon', items: [] } as Box,
 });
 
-const size = (defs: Map<string, Def>, it: Item, r = it.r) => dims(defs.get(it.type)!, r);
+const size = (defs: Map<string, Def>, it: Item) => dims(defs.get(it.type)!);
 
 // Incape itemul in `b` la (x,y)? Itemul insusi nu conteaza ca obstacol (mutare in acelasi grid)
-export function fits(defs: Map<string, Def>, b: Box, it: Item, x: number, y: number, r: boolean): boolean {
+export function fits(defs: Map<string, Def>, b: Box, it: Item, x: number, y: number): boolean {
   if (b.slot) return spec(it.type)?.slot === b.slot && b.items.every((o) => o === it);
-  const [w, h] = dims(defs.get(it.type)!, r);
+  const [w, h] = dims(defs.get(it.type)!);
   if (x < 0 || y < 0 || x + w > b.w || (!b.grow && y + h > (b.cap ?? b.h))) return false;
   return b.items.every((o) => {
     if (o === it) return true;
@@ -43,9 +44,9 @@ export function fits(defs: Map<string, Def>, b: Box, it: Item, x: number, y: num
 // Primul loc liber (normal, apoi rotit); itemul trebuie sa nu fie deja in `b`
 export function autoPlace(defs: Map<string, Def>, b: Box, it: Item): boolean {
   const rows = b.slot ? 1 : b.grow ? 400 : (b.cap ?? b.h);
-  for (let y = 0; y < rows; y++) for (let x = 0; x < (b.slot ? 1 : b.w); x++) for (const r of [false, true]) {
-    if (!fits(defs, b, it, x, y, r)) continue;
-    Object.assign(it, b.slot ? { x: 0, y: 0, r: false } : { x, y, r });
+  for (let y = 0; y < rows; y++) for (let x = 0; x < (b.slot ? 1 : b.w); x++) {
+    if (!fits(defs, b, it, x, y)) continue;
+    Object.assign(it, b.slot ? { x: 0, y: 0 } : { x, y });
     b.items.push(it);
     return true;
   }
@@ -59,10 +60,10 @@ export const packSize = (back?: Box) => (back?.items[0] && spec(back.items[0].ty
 function fitBag(defs: Map<string, Def>, b: Box, w: number, h: number): boolean {
   if (b.items.every((it) => { const [iw, ih] = size(defs, it); return it.x + iw <= w && (b.grow || it.y + ih <= h); })) { b.w = w; b.h = h; return true; }
   const tmp: Box = { ...b, w, h, items: [] };
-  const saved = b.items.map((it) => ({ it, x: it.x, y: it.y, r: it.r }));
+  const saved = b.items.map((it) => ({ it, x: it.x, y: it.y }));
   const area = (it: Item) => { const [iw, ih] = size(defs, it); return iw * ih; };
   for (const it of [...b.items].sort((a, c) => area(c) - area(a))) {
-    if (!autoPlace(defs, tmp, it)) { for (const s of saved) Object.assign(s.it, { x: s.x, y: s.y, r: s.r }); return false; }
+    if (!autoPlace(defs, tmp, it)) { for (const s of saved) Object.assign(s.it, { x: s.x, y: s.y }); return false; }
   }
   b.items = tmp.items;
   b.w = w; b.h = h;
@@ -74,12 +75,12 @@ export function refit(defs: Map<string, Def>, bag: Box, back: Box): string | nul
   return fitBag(defs, bag, p.w, p.h) ? null : 'Inventarul ar ramane fara loc: fa loc inainte sa schimbi rucsacul';
 }
 
-type Snap = { b: Box; items: Item[]; w: number; h: number; pos: { it: Item; x: number; y: number; r: boolean; qty: number }[] }[];
-export const snap = (boxes: Box[]): Snap => [...new Set(boxes)].map((b) => ({ b, items: [...b.items], w: b.w, h: b.h, pos: b.items.map((it) => ({ it, x: it.x, y: it.y, r: it.r, qty: it.qty })) }));
-export const restore = (s: Snap) => s.forEach(({ b, items, w, h, pos }) => { b.items = items; b.w = w; b.h = h; pos.forEach((p) => Object.assign(p.it, { x: p.x, y: p.y, r: p.r, qty: p.qty })); });
+type Snap = { b: Box; items: Item[]; w: number; h: number; pos: { it: Item; x: number; y: number; qty: number }[] }[];
+export const snap = (boxes: Box[]): Snap => [...new Set(boxes)].map((b) => ({ b, items: [...b.items], w: b.w, h: b.h, pos: b.items.map((it) => ({ it, x: it.x, y: it.y, qty: it.qty })) }));
+export const restore = (s: Snap) => s.forEach(({ b, items, w, h, pos }) => { b.items = items; b.w = w; b.h = h; pos.forEach((p) => Object.assign(p.it, { x: p.x, y: p.y, qty: p.qty })); });
 
 // ---- pozitiile itemelor se tin local (baza de date nu stie de grid) ----
-type Layout = Record<string, { c: string; x: number; y: number; r: boolean }>;
+type Layout = Record<string, { c: string; x: number; y: number }>;
 const LK = (uid: string) => `uh:layout:${uid}`;
 export function loadLayout(uid: string): Layout {
   try { return JSON.parse(localStorage.getItem(LK(uid)) ?? '{}'); } catch { return {}; }
@@ -87,7 +88,7 @@ export function loadLayout(uid: string): Layout {
 const store = (uid: string, l: Layout) => { try { localStorage.setItem(LK(uid), JSON.stringify(l)); } catch { /* ignorat */ } };
 export function saveLayout(uid: string, boxes: Box[]) {
   const l: Layout = {};
-  for (const b of boxes) for (const it of b.items) l[it.id] = { c: b.id, x: it.x, y: it.y, r: it.r };
+  for (const b of boxes) for (const it of b.items) l[it.id] = { c: b.id, x: it.x, y: it.y };
   store(uid, l);
 }
 // Dupa raid itemele ajung in stash: uitam loadout-ul
@@ -112,7 +113,7 @@ export function distribute(defs: Map<string, Def>, uid: string, items: Item[], b
   const first = (it: Item) => (spec(it.type)?.slot === 'back' ? 0 : 1);
   for (const it of [...items].sort((a, b) => first(a) - first(b))) {
     const s = l[it.id], b = s && boxes.find((x) => x.id === s.c);
-    if (b && fits(defs, b, it, s.x, s.y, s.r)) { Object.assign(it, { x: s.x, y: s.y, r: s.r }); b.items.push(it); after?.(); continue; }
+    if (b && fits(defs, b, it, s.x, s.y)) { Object.assign(it, { x: s.x, y: s.y }); b.items.push(it); after?.(); continue; }
     if (!autoPlace(defs, fallback, it)) placeOverflow(defs, fallback, it);   // nu pierdem iteme din vedere, dar gridul nu creste
     after?.();
   }
@@ -127,23 +128,8 @@ const SLOT_POS: Record<string, string> = Object.fromEntries(
   Object.entries({ head: [38, 0], body: [0, 88], back: [164, 0], weapon: [45, 252] }).map(([k, [l, t]]) => [k, `left:${l}px;top:${t}px`]),
 );
 
-// Iconite simple (24x24) dupa tipul itemului; culoarea vine din raritate (currentColor)
-const ICONS: Record<string, string> = {
-  gun: '<path d="M2 8h14l2 1.5h4V13h-6l-1 5h-4l1-5H8l-1 3.5H3.5L5 13H2z"/>',
-  head: '<path d="M4 15a8 8 0 0 1 16 0v2H4zM6 18.5h12V20H6z"/>',
-  body: '<path d="M7 3l3 2h4l3-2 4 3-2.5 4.5V21h-11V10.5L3 6z"/>',
-  back: '<path fill-rule="evenodd" d="M9 3h6l1 3h3v15H5V6h3zM9 13h6v5H9z"/>',
-  heal: '<path d="M9.5 3h5v6.5H21v5h-6.5V21h-5v-6.5H3v-5h6.5z"/>',
-  ammo: '<path d="M4 21V11l2.2-3L8.4 11v10zM10.8 21V9l2.2-3.5L15.2 9v12zM17.6 21V12l2.2-3 2.2 3v9z"/>',
-  key: '<circle cx="7.5" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2.6"/><path d="M11.5 12H22m-3 0v4m-3.5-4v3" fill="none" stroke="currentColor" stroke-width="2.6"/>',
-  box: '<path d="M12 2.5l9 4.5v10l-9 4.5-9-4.5V7z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 7l9 4.5L21 7M12 11.5v10" fill="none" stroke="currentColor" stroke-width="2"/>',
-};
-const iconOf = (d: Def) => {
-  const s = spec(d.item_type);
-  const k = s?.gun ? 'gun' : s?.slot ?? (s?.heal ? 'heal' : s?.door ? 'key' : d.item_type.startsWith('ammo_') ? 'ammo' : 'box');
-  return `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${ICONS[k] ?? ICONS.box}</svg>`;
-};
-export const iconSvg = iconOf;
+// Every item has its own illustration (see game/itemart.ts)
+export const iconSvg = itemArt;
 
 // Tooltip propriu (inlocuieste atributul title): titlu colorat dupa raritate, apoi liniile din tip()
 export function tipHtml(d: Def, qty: number): string {
@@ -163,29 +149,28 @@ export const hideTip = () => { if (tipEl) tipEl.style.display = 'none'; };
 
 
 
-type Drag = { it: Item; from: Box; r: boolean; el: HTMLElement; hl: HTMLElement; dx: number; dy: number; over: { b: Box; x: number; y: number } | null; out: boolean };
+type Drag = { it: Item; from: Box; el: HTMLElement; hl: HTMLElement; dx: number; dy: number; over: { b: Box; x: number; y: number } | null; out: boolean };
 
 export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[], bag: Box, hooks: Hooks) {
   const { defs } = hooks;
   const boxes = [...(left ? [left] : []), ...slots, bag];
   let drag: Drag | null = null;
-  let last: PointerEvent | null = null;
   let zone: HTMLDivElement | null = null;   // banner "arunca pe jos" cat timp tragi un item
 
   const itemHtml = (b: Box, it: Item) => {
     const def = defs.get(it.type)!;
-    const [w, h] = dims(def, it.r);
+    const [w, h] = dims(def);
     const hid = hooks.hidden?.(b, it);
     const x = b.slot ? ((b.w - w) * C) / 2 : it.x * C, y = b.slot ? ((b.h - h) * C) / 2 : it.y * C;
     const named = w * h >= 3 || (w >= 2 && h >= 1 && w * h >= 2);
     // itemele nedeblocate nu poarta clasa de raritate: sunt gri, ca sa nu dea de gol ce sunt
     return `<div class="it ${hid ? 'hid' : `r-${def.rarity}`}${hooks.selected?.(it) ? ' sel' : ''}" data-it="${esc(it.id)}" data-box="${b.id}" style="left:${x}px;top:${y}px;width:${w * C}px;height:${h * C}px">
-      ${hid ? '<span class="q">?</span><i class="pg"></i>' : `${iconOf(def)}${named ? `<span class="nm">${esc(def.name)}</span>` : ''}${it.qty > 1 ? `<b>${it.qty}</b>` : ''}`}</div>`;
+      ${hid ? '<span class="q">?</span><i class="pg"></i>' : `${itemArt(def)}${named ? `<span class="nm">${esc(def.name)}</span>` : ''}${it.qty > 1 ? `<b>${it.qty}</b>` : ''}`}</div>`;
   };
   const boxHtml = (b: Box) => {
     // grila cu `grow` (container, sau stash-ul cand are iteme peste capacitate) se mareste exact cat are nevoie, fara rand in plus
     if (b.grow) b.h = Math.max(b.h, ...b.items.map((it) => it.y + size(defs, it)[1]));
-    const empty = b.slot && !b.items.length ? `<i>${esc(b.title)}${b.slot === 'weapon' ? '<br>(pistol implicit)' : ''}</i>` : '';
+    const empty = b.slot && !b.items.length ? `<i>${esc(b.title)}${b.slot === 'weapon' ? '<br>(default pistol)' : ''}</i>` : '';
     return `<div class="box${b.slot ? ' slot' : ''}" data-box="${b.id}" style="width:${b.w * C}px;height:${b.h * C}px${b.slot ? ';' + SLOT_POS[b.slot] : ''}">${b.items.map((it) => itemHtml(b, it)).join('')}${empty}</div>`;
   };
 
@@ -196,7 +181,7 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     if (root.offsetHeight) root.style.minHeight = `${root.offsetHeight}px`;
     root.innerHTML = `<div class="inv">
       ${left ? `<div class="pn"><h4>${esc(left.title)}</h4><div class="sc">${boxHtml(left)}</div></div>` : ''}
-      <div class="pn"><h4>Echipament</h4><div class="ch" style="width:${EQ_W}px;height:${EQ_H}px">
+      <div class="pn"><h4>Equipment</h4><div class="ch" style="width:${EQ_W}px;height:${EQ_H}px">
         ${slots.map(boxHtml).join('')}</div></div>
       <div class="pn"><h4>${esc(bag.title)}</h4>${boxHtml(bag)}</div></div>`;
     const sc = root.querySelector<HTMLElement>('.sc');
@@ -205,15 +190,8 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     root.style.minHeight = '';
   };
 
-  const sizeGhost = (d: Drag) => {
-    const [w, h] = dims(defs.get(d.it.type)!, d.r);
-    d.el.style.width = `${w * C}px`;
-    d.el.style.height = `${h * C}px`;
-  };
-
   const move = (e: PointerEvent) => {
     const d = drag!;
-    last = e;
     d.el.style.left = `${e.clientX - d.dx}px`;
     d.el.style.top = `${e.clientY - d.dy}px`;
     d.hl.remove();
@@ -227,8 +205,8 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     if (!hit || !b) return;
     const r0 = hit.getBoundingClientRect();
     const x = Math.round((e.clientX - d.dx - r0.left) / C), y = Math.round((e.clientY - d.dy - r0.top) / C);
-    const ok = fits(defs, b, d.it, x, y, d.r) && (!b.readonly || b === d.from);
-    const [w, h] = dims(defs.get(d.it.type)!, d.r);
+    const ok = fits(defs, b, d.it, x, y) && (!b.readonly || b === d.from);
+    const [w, h] = dims(defs.get(d.it.type)!);
     d.hl.className = `hl ${ok ? 'ok' : 'no'}`;
     d.hl.style.cssText = b.slot ? `left:0;top:0;width:${b.w * C}px;height:${b.h * C}px` : `left:${x * C}px;top:${y * C}px;width:${w * C}px;height:${h * C}px`;
     hit.appendChild(d.hl);
@@ -263,7 +241,7 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     };
     if (o) {
       commit(o.b, () => {
-        Object.assign(d.it, o.b.slot ? { x: 0, y: 0, r: false } : { x: o.x, y: o.y, r: d.r });
+        Object.assign(d.it, o.b.slot ? { x: 0, y: 0 } : { x: o.x, y: o.y });
         o.b.items.push(d.it);
       });
     } else if (out) {
@@ -289,7 +267,7 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     ghost.classList.add('dragghost');
     document.body.appendChild(ghost);
     el.style.opacity = '.3';
-    drag = { it, from, r: it.r, el: ghost, hl: document.createElement('div'), dx: e.clientX - rect.left, dy: e.clientY - rect.top, over: null, out: false };
+    drag = { it, from, el: ghost, hl: document.createElement('div'), dx: e.clientX - rect.left, dy: e.clientY - rect.top, over: null, out: false };
     hideTip();
     if (hooks.ground) {
       zone = document.createElement('div');
@@ -319,19 +297,11 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
   });
   root.addEventListener('mouseleave', hideTip);
 
-  // R = roteste itemul tinut in mana
-  const onKey = (e: KeyboardEvent) => {
-    if (!drag || e.key.toLowerCase() !== 'r') return;
-    drag.r = !drag.r;
-    sizeGhost(drag);
-    if (last) move(last);
-  };
-  window.addEventListener('keydown', onKey);
 
   render();
   return {
     render,
-    destroy() { stop(); hideTip(); window.removeEventListener('keydown', onKey); root.innerHTML = ''; },
+    destroy() { stop(); hideTip(); root.innerHTML = ''; },
   };
 }
 
@@ -344,7 +314,7 @@ export function quickEquip(defs: Map<string, Def>, it: Item, from: Box, slots: R
 }
 
 function quickEquip0(defs: Map<string, Def>, it: Item, from: Box, slots: Record<string, Box>, fallback: Box): boolean {
-  const old = { x: it.x, y: it.y, r: it.r };
+  const old = { x: it.x, y: it.y };
   if (from.slot) {
     from.items = from.items.filter((i) => i !== it);
     if (autoPlace(defs, fallback, it)) return true;
@@ -356,7 +326,7 @@ function quickEquip0(defs: Map<string, Def>, it: Item, from: Box, slots: Record<
   const prev = to.items[0];
   from.items = from.items.filter((i) => i !== it);
   to.items = [];
-  Object.assign(it, { x: 0, y: 0, r: false });
+  Object.assign(it, { x: 0, y: 0 });
   to.items.push(it);
   if (prev && !autoPlace(defs, from, prev) && !autoPlace(defs, fallback, prev)) {   // nu are unde pleca: anulam
     to.items = [prev];

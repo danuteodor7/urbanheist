@@ -1,11 +1,17 @@
 import type { ItemDef } from './map';
 
+// Prices: you sell la SELL_PCT% din base_value, cumperi (magazinul din raid) la BUY_MULT x base_value.
+// SELL_PCT trebuie sa fie identic cu cel din SQL (sell_item, vezi supabase/changes.sql)
+export const SELL_PCT = 40;
+export const BUY_MULT = 2;
+export const sellPrice = (d: { base_value?: number }, qty: number) => Math.floor(((d.base_value ?? 0) * qty * SELL_PCT) / 100);
+
 export type Slot = 'head' | 'body' | 'weapon' | 'back';
 // Inventarul de baza (fara rucsac echipat): buzunare
 export const BASE_BAG = { w: 6, h: 4 };
 export type Def = ItemDef & { base_value?: number };
-// x,y = celula stanga-sus in grid; r = rotit 90°; found = gasit in raid (nu adus din stash)
-export type Item = { id: string; type: string; qty: number; x: number; y: number; r: boolean; found?: boolean };
+// x,y = top-left cell in the grid; found = looted in raid (not brought from the stash). Items never rotate.
+export type Item = { id: string; type: string; qty: number; x: number; y: number; found?: boolean };
 
 export type Gun = {
   dmg: number; fire: number; spread: number; pellets: number; speed: number; life: number;
@@ -35,32 +41,43 @@ const G = {
   smg: { dmg: 12, fire: 90, spread: 0.12, pellets: 1, speed: 540, life: 1000, mag: 30, ammo: 'ammo_smg', reload: 1700 },
   shotgun: { dmg: 11, fire: 900, spread: 0.28, pellets: 6, speed: 480, life: 600, mag: 6, ammo: 'ammo_shotgun', reload: 2400 },
   rifle: { dmg: 28, fire: 160, spread: 0.05, pellets: 1, speed: 720, life: 1400, mag: 30, ammo: 'ammo_rifle', reload: 2000 },
+  m4: { dmg: 30, fire: 130, spread: 0.045, pellets: 1, speed: 740, life: 1400, mag: 30, ammo: 'ammo_rifle', reload: 1800 },
   sniper: { dmg: 90, fire: 1400, spread: 0.005, pellets: 1, speed: 1000, life: 1800, mag: 5, ammo: 'ammo_sniper', reload: 2600, range: 780, fov: (55 * Math.PI) / 180 },
 } satisfies Record<string, Gun>;
 
 // Itemele cunoscute. Orice alt item din baza de date e recunoscut dupa nume/tip de `registerDefs` (vezi mai jos).
 export const CATALOG: Record<string, Spec> = {
   revolver: { w: 2, h: 1, slot: 'weapon', gun: G.revolver },
+  makarov: { w: 2, h: 1, slot: 'weapon', gun: G.pistol2 },
   smg: { w: 3, h: 2, slot: 'weapon', gun: G.smg },
+  assault_rifle: { w: 5, h: 2, slot: 'weapon', gun: G.m4 },
+  body_armor: { w: 2, h: 3, slot: 'body', red: 0.25 },
+  exo_armor: { w: 4, h: 4, slot: 'body', red: 0.6 },
+  fuel_can: { w: 1, h: 2 },
+  laptop: { w: 2, h: 1 },
+  prototype_tech: { w: 2, h: 1 },
+  encrypted_server: { w: 2, h: 2 },
   shotgun: { w: 4, h: 2, slot: 'weapon', gun: G.shotgun },
   rifle: { w: 5, h: 2, slot: 'weapon', gun: G.rifle },
   sniper: { w: 6, h: 2, slot: 'weapon', gun: G.sniper },
-  helmet_light: { w: 2, h: 2, slot: 'head', red: 0.1 },
-  helmet_heavy: { w: 2, h: 2, slot: 'head', red: 0.2 },
+  helmet_common: { w: 2, h: 2, slot: 'head', red: 0.1 },
+  helmet_rare: { w: 2, h: 2, slot: 'head', red: 0.2 },
   helmet_epic: { w: 2, h: 2, slot: 'head', red: 0.28 },
   helmet_legendary: { w: 2, h: 2, slot: 'head', red: 0.38 },
-  vest_light: { w: 2, h: 3, slot: 'body', red: 0.2 },
-  vest_heavy: { w: 3, h: 3, slot: 'body', red: 0.4 },
+  vest_common: { w: 2, h: 3, slot: 'body', red: 0.15 },
+  vest_rare: { w: 3, h: 3, slot: 'body', red: 0.28 },
+  vest_epic: { w: 3, h: 3, slot: 'body', red: 0.4 },
+  vest_legendary: { w: 4, h: 4, slot: 'body', red: 0.55 },
   bandage: { w: 1, h: 1, heal: { hp: 20, ms: 1500 } },
   medkit: { w: 2, h: 1, heal: { hp: 50, ms: 3000 } },
   stim: { w: 1, h: 2, heal: { hp: 70, ms: 1200 } },
-  key_warehouse: { w: 1, h: 1, door: 'Depozit' },
-  keycard_bank: { w: 2, h: 1, door: 'Banca' },
-  key_house: { w: 1, h: 1, door: 'Casa' },
-  backpack_small: { w: 2, h: 2, slot: 'back', pack: { w: 7, h: 5 } },
-  backpack_medium: { w: 3, h: 3, slot: 'back', pack: { w: 8, h: 7 } },
-  backpack_large: { w: 3, h: 4, slot: 'back', pack: { w: 10, h: 8 } },
-  backpack_military: { w: 4, h: 4, slot: 'back', pack: { w: 12, h: 9 } },
+  key_warehouse: { w: 1, h: 1, door: 'Warehouse' },
+  keycard_bank: { w: 2, h: 1, door: 'Bank' },
+  key_house: { w: 1, h: 1, door: 'House' },
+  backpack_common: { w: 2, h: 2, slot: 'back', pack: { w: 7, h: 5 } },
+  backpack_rare: { w: 3, h: 3, slot: 'back', pack: { w: 8, h: 7 } },
+  backpack_epic: { w: 3, h: 4, slot: 'back', pack: { w: 10, h: 8 } },
+  backpack_legendary: { w: 4, h: 4, slot: 'back', pack: { w: 12, h: 9 } },
 };
 
 // Rucsacuri necunoscute din baza de date: dimensiunea dupa raritate
@@ -84,7 +101,7 @@ function infer(d: Def): Spec | undefined {
   }
 
   if (/key|cheie|keycard/.test(s)) {
-    const n = /bank|banca/.test(s) ? 'Banca' : /depozit|warehouse|storage/.test(s) ? 'Depozit' : /casa|house|home|apart/.test(s) ? 'Casa' : /magazin|shop|store/.test(s) ? 'Magazin' : undefined;
+    const n = /bank|banca/.test(s) ? 'Bank' : /depozit|warehouse|storage/.test(s) ? 'Warehouse' : /casa|house|home|apart/.test(s) ? 'House' : /magazin|shop|store/.test(s) ? 'Shop' : undefined;
     return n ? { w, h, door: n } : undefined;
   }
 
@@ -109,8 +126,27 @@ function infer(d: Def): Spec | undefined {
 }
 
 // Apeleaza o data dupa ce ai incarcat item_defs (hub si raid): itemele necunoscute devin utilizabile
+// English display names for every known item (the database may still hold old names)
+const NAMES: Record<string, string> = {
+  revolver: 'Revolver', smg: 'SMG', shotgun: 'Shotgun', rifle: 'Assault Rifle', sniper: 'Sniper Rifle',
+  helmet_common: 'Scout Helmet', helmet_rare: 'Combat Helmet', helmet_epic: 'Assault Helmet', helmet_legendary: 'Warlord Helmet',
+  vest_common: 'Padded Vest', vest_rare: 'Plate Carrier', vest_epic: 'Heavy Plate Vest', vest_legendary: 'Titan Armor',
+  backpack_common: 'Day Pack', backpack_rare: 'Hiking Backpack', backpack_epic: 'Tactical Backpack', backpack_legendary: 'Military Backpack',
+  makarov: 'Makarov Pistol', assault_rifle: 'M4A1', body_armor: 'Ballistic Vest', exo_armor: 'Exoskeleton Armor',
+  fuel_can: 'Fuel Can', bolts: 'Bolts', canned_food: 'Canned Food', gun_parts: 'Gun Parts',
+  cheap_watch: 'Cheap Watch', phone: 'Phone', keycard: 'Access Card', laptop: 'Laptop', gold_bar: 'Gold Bar',
+  prototype_tech: 'Prototype Tech', bank_diamond: 'Bank Diamond', encrypted_server: 'Encrypted Server',
+  bandage: 'Bandage', medkit: 'Medkit', stim: 'Combat Stim',
+  key_warehouse: 'Warehouse Key', keycard_bank: 'Bank Keycard', key_house: 'House Key',
+  ammo_pistol: 'Pistol Ammo', ammo_smg: 'SMG Ammo', ammo_rifle: 'Rifle Ammo', ammo_shotgun: 'Shotgun Shells', ammo_sniper: 'Sniper Ammo',
+};
+const SET_RE = /^(helmet|vest|backpack)_(common|rare|epic|legendary)$/;
+
 export function registerDefs(defs: Iterable<Def>) {
   for (const d of defs) {
+    if (NAMES[d.item_type]) d.name = NAMES[d.item_type];
+    const set = d.item_type.match(SET_RE);
+    if (set) d.rarity = set[2]; // armor sets: the rarity is part of the item type
     let sp = CATALOG[d.item_type] ?? infer(d);
     if (!sp) continue;
     // vesta legendara = 4x4, ca rucsacul legendar
@@ -121,26 +157,39 @@ export function registerDefs(defs: Iterable<Def>) {
 
 export const spec = (type: string): Spec | undefined => CATALOG[type];
 
-export function dims(d: Def, r = false): [number, number] {
+// Cat se stackuieste un item intr-un singur slot. Armele, armurile, rucsacurile si cheile NU se stackuiesc (1).
+// Gloantele: tabelul de mai jos (cele care nu apar au ammoDefault). Alte iteme stackabile: otherDefault.
+const STACK_MAX: Record<string, number> = { ammo_pistol: 60, ammo_shotgun: 60, ammo_sniper: 40 };
+const AMMO_STACK = 360, OTHER_STACK = 10;
+export function stackMax(d: Def): number {
+  const s = CATALOG[d.item_type];
+  if (s?.gun || s?.slot || s?.red || s?.door || /key|cheie/i.test(d.item_type)) return 1;
+  if (!d.stackable) return 1;
+  if (STACK_MAX[d.item_type]) return STACK_MAX[d.item_type];
+  return /^ammo_/.test(d.item_type) ? AMMO_STACK : OTHER_STACK;
+}
+
+export function dims(d: Def): [number, number] {
   const s = CATALOG[d.item_type];
   const w = s ? s.w : Math.ceil(Math.sqrt(d.slots || 1));
   const h = s ? s.h : Math.ceil((d.slots || 1) / w);
-  return r ? [h, w] : [w, h];
+  return [w, h];
 }
 
 export function tip(d: Def, qty: number): string {
   const s = CATALOG[d.item_type];
   const [w, h] = dims(d);
-  const l = [`${d.name}${qty > 1 ? ` x${qty}` : ''}`, `${d.rarity}, ${w}x${h}${d.base_value ? `, $${d.base_value}` : ''}`];
+  const l = [`${d.name}${qty > 1 ? ` x${qty}` : ''}`, `${d.rarity}, ${w}x${h}${d.base_value ? `, sells for $${sellPrice(d, 1)}` : ''}`];
   if (s?.gun) {
-    l.push(`Damage ${s.gun.dmg}${s.gun.pellets > 1 ? `x${s.gun.pellets}` : ''}, ${(1000 / s.gun.fire).toFixed(1)} focuri/s`);
-    l.push(`Incarcator ${s.gun.mag}, gloante: ${s.gun.ammo ?? 'infinite'} (R = reincarca)`);
-    if (s.gun.range) l.push('Viziune extinsa (luneta)');
+    l.push(`Damage ${s.gun.dmg}${s.gun.pellets > 1 ? `x${s.gun.pellets}` : ''}, ${(1000 / s.gun.fire).toFixed(1)} shots/s`);
+    l.push(`Magazine ${s.gun.mag}, ammo: ${s.gun.ammo ? (NAMES[s.gun.ammo] ?? s.gun.ammo) : 'infinite'} (R = reload)`);
+    if (s.gun.range) l.push('Extended vision (scope)');
   }
-  if (s?.red) l.push(`Reduce damage-ul cu ${Math.round(s.red * 100)}%`);
-  if (s?.heal) l.push(`+${s.heal.hp} HP in ${s.heal.ms / 1000}s (clic dreapta sau H)`);
-  if (s?.pack) l.push(`Rucsac: ${s.pack.w}x${s.pack.h} celule de inventar (${s.pack.w * s.pack.h})`);
-  if (s?.door) l.push(`Deschide: ${s.door} (apasa E langa usa)`);
-  if (s?.slot) l.push('Clic dreapta: echipeaza');
+  if (s?.red) l.push(`Reduces damage by ${Math.round(s.red * 100)}%`);
+  if (s?.heal) l.push(`Heals ${s.heal.hp} HP over ${s.heal.ms / 1000}s (right-click or H)`);
+  if (s?.pack) l.push(`Backpack: ${s.pack.w}x${s.pack.h} inventory cells (${s.pack.w * s.pack.h})`);
+  if (s?.door) l.push(`Opens: ${s.door} (press E next to the door)`);
+  if (s?.slot) l.push('Right-click: equip');
+  if (stackMax(d) > 1) l.push(`Stacks up to ${stackMax(d)}`);
   return l.join('\n');
 }

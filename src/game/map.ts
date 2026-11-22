@@ -19,10 +19,10 @@ export type Vehicle = { x: number; y: number; a: number };   // tile + unghi (ra
 export type ShopKind = 'arms' | 'ammo' | 'med' | 'gear';
 export type Shop = { x: number; y: number; kind: ShopKind };
 export const SHOP_INFO: Record<ShopKind, { name: string; color: number; hex: string }> = {
-  arms: { name: 'ARMURERIE', color: 0xef5350, hex: '#ef5350' },
-  ammo: { name: 'MUNITII', color: 0xffca28, hex: '#ffca28' },
-  med: { name: 'FARMACIE', color: 0x66bb6a, hex: '#66bb6a' },
-  gear: { name: 'ECHIPAMENT & RUCSACURI', color: 0x42a5f5, hex: '#42a5f5' },
+  arms: { name: 'ARMORY', color: 0xef5350, hex: '#ef5350' },
+  ammo: { name: 'AMMO', color: 0xffca28, hex: '#ffca28' },
+  med: { name: 'PHARMACY', color: 0x66bb6a, hex: '#66bb6a' },
+  gear: { name: 'GEAR & BACKPACKS', color: 0x42a5f5, hex: '#42a5f5' },
 };
 export type GameMap = {
   walls: Wall[];                                // toate blocheaza miscarea
@@ -322,7 +322,7 @@ export function generateMap(seed: string, defs: ItemDef[]): GameMap {
       const locked = kind === 'house' && rng() < 0.45;   // case incuiate: cheia se gaseste in loot, dar si loot-ul e mai bun
       building(bx, by, hw, hh, [d], kind === 'ruins' ? 0.35 : 0);
       if (part >= 0) { const gap = by + 1 + int(hh - 2); for (let y = by + 1; y < by + hh - 1; y++) if (y !== gap) wall(part, y); }
-      if (locked) lock(d[0], d[1], 'Casa', `h${li}`);
+      if (locked) lock(d[0], d[1], 'House', `h${li}`);
       addBox(bx + 1, by + 1, hw - 2, hh - 2, zone, 1 + int(2) + (hw * hh > 40 ? 1 : 0), locked);
       for (let n = kind === 'house' ? int(3) + (area > 70 ? 2 : 0) : 2 + int(3); n > 0; n--) {
         const x = lx + int(lw), y = ly + int(lh);
@@ -335,7 +335,7 @@ export function generateMap(seed: string, defs: ItemDef[]): GameMap {
       lay(lx, ly, lw, lh, 'paved');
       const doors: [number, number][] = [[bx, by + 1 + int(bh - 2)], [bx + bw - 1, by + 1 + int(bh - 2)]];
       building(bx, by, bw, bh, doors);
-      for (const [dx, dy] of doors) lock(dx, dy, 'Depozit', `w${li}`);   // depozitele sunt incuiate
+      for (const [dx, dy] of doors) lock(dx, dy, 'Warehouse', `w${li}`);   // depozitele sunt incuiate
       for (let ox = 2; ox <= bw - 3; ox += 2) for (let oy = 2; oy <= bh - 3; oy += 2) if (rng() < 0.45) wall(bx + ox, by + oy, 'crate');
       addBox(bx + 1, by + 1, bw - 2, bh - 2, zone, 2 + int(2) + (bw * bh > 50 ? 1 : 0), true);
     } else if (kind === 'shop' || kind === 'clinic') {
@@ -437,8 +437,8 @@ export function generateMap(seed: string, defs: ItemDef[]): GameMap {
     if (x !== BX + 3 && x !== BX + 9) wall(x, BY + 4);
     if (x !== BX + 2 && x !== BX + 10) wall(x, BY + 9);
   }
-  lock(BX, BY + 2, 'Banca', 'bank');
-  lock(BX + BW - 1, BY + BH - 3, 'Banca', 'bank');
+  lock(BX, BY + 2, 'Bank', 'bank');
+  lock(BX + BW - 1, BY + BH - 3, 'Bank', 'bank');
   addBox(BX + 1, BY + 1, BW - 2, BH - 2, 'red', 10, true);
 
   // Copaci pe trotuare

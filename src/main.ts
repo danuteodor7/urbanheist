@@ -14,7 +14,7 @@ import {
   refit,
   type Box,
 } from "./ui/inventory";
-import { registerDefs, dims, spec, type Def, type Item } from "./game/items.ts";
+import { registerDefs, dims, spec, sellPrice, type Def, type Item } from "./game/items.ts";
 import { confirmBox, infoBox } from "./ui/modal.ts";
 
 type Row = {
@@ -29,17 +29,21 @@ const STASH_START = 100, STASH_STEP = 50, STASH_MAX = 750;
 const upgradeCost = (slots: number) => 1000 * ((slots - 50) / 50);
 
 // Categorii pentru sortarea / selectia din stash
-const CATS = ["Arme", "Armuri", "Rucsacuri", "Heal", "Gloante", "Chei", "Altele"];
+const CATS = ["Weapons", "Armor", "Backpacks", "Healing", "Ammo", "Keys", "Valuables", "Materials", "Other"];
+const VALUABLES = new Set(["cheap_watch", "phone", "keycard", "laptop", "gold_bar", "prototype_tech", "bank_diamond", "encrypted_server"]);
+const MATERIALS = new Set(["fuel_can", "bolts", "canned_food", "gun_parts"]);
 const RAR = ["legendary", "epic", "rare", "uncommon", "common"];
 const catOf = (d: Def): string => {
   const s = spec(d.item_type);
-  if (s?.gun) return "Arme";
-  if (s?.slot === "head" || s?.slot === "body") return "Armuri";
-  if (s?.slot === "back") return "Rucsacuri";
-  if (s?.heal) return "Heal";
-  if (/^ammo_/.test(d.item_type)) return "Gloante";
-  if (s?.door || /key|cheie/i.test(d.item_type)) return "Chei";
-  return "Altele";
+  if (s?.gun) return "Weapons";
+  if (s?.slot === "head" || s?.slot === "body") return "Armor";
+  if (s?.slot === "back") return "Backpacks";
+  if (s?.heal) return "Healing";
+  if (/^ammo_/.test(d.item_type)) return "Ammo";
+  if (s?.door || /key|cheie/i.test(d.item_type)) return "Keys";
+  if (VALUABLES.has(d.item_type)) return "Valuables";
+  if (MATERIALS.has(d.item_type)) return "Materials";
+  return "Other";
 };
 
 const app = document.getElementById("app")!;
@@ -61,7 +65,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const isNet = (m: string) =>
   /fetch|network|timeout|timed out|failed to|load failed|abort/i.test(m);
 
-// Returneaza {data} la succes, null la eroare (eroarea apare in #msg). Reincearca singur la erori de retea.
+// Returneaza {data} la succes, null la eroare (eroarea apare in #msg). Retry singur la erori de retea.
 async function rpc(fn: string, args?: object, tries = 3) {
   lastErr = "";
   for (let i = 0; i < tries; i++) {
@@ -74,11 +78,11 @@ async function rpc(fn: string, args?: object, tries = 3) {
       lastErr = String((e as Error)?.message ?? e);
     }
     if (i < tries - 1) {
-      msg(`Conexiune slaba, reincerc (${i + 1}/${tries - 1})...`);
+      msg(`Weak connection, retrying (${i + 1}/${tries - 1})...`);
       await wait(800 * (i + 1));
     }
   }
-  msg(lastErr || "Eroare necunoscuta");
+  msg(lastErr || "Unknown error");
   return null;
 }
 
@@ -88,10 +92,10 @@ function showAuth() {
   app.innerHTML = `<div class="auth">
     <div class="card auth-card">
       <div class="brand big">URBAN<span>HEIST</span></div>
-      <p class="sub">Extraction shooter 2D · intra, jefuieste, scoate-ti prada</p>
-      <input id="u" placeholder="username (doar la Register)" autocomplete="username">
+      <p class="sub">2D extraction shooter · get in, loot, get out with the prize</p>
+      <input id="u" placeholder="username (Register only)" autocomplete="username">
       <input id="e" type="email" placeholder="email" autocomplete="email">
-      <input id="p" type="password" placeholder="parola (min 6)" autocomplete="current-password">
+      <input id="p" type="password" placeholder="password (min 6)" autocomplete="current-password">
       <div class="row"><button id="login" class="btn primary">Login</button><button id="reg" class="btn">Register</button></div>
       <p id="msg" class="note"></p>
     </div></div>`;
@@ -112,7 +116,7 @@ function showAuth() {
       options: { data: { username: val("u").trim() } },
     });
     if (error) return msg(error.message);
-    if (!data.session) msg("Cont creat. Confirma emailul, apoi Login.");
+    if (!data.session) msg("Account created. Confirm your email, then Login.");
   };
 }
 
@@ -143,7 +147,7 @@ async function showHub() {
 
   if (!res) {
     card(
-      `<p>Nu pot contacta serverul (fetch failed). Verifica internetul.</p><button id="retry" class="btn primary">Reincearca</button><button id="out" class="btn">Logout</button>`,
+      `<p>Cannot reach the server (fetch failed). Check your internet connection.</p><button id="retry" class="btn primary">Retry</button><button id="out" class="btn">Logout</button>`,
     );
     $("retry").onclick = () => showHub();
     $("out").onclick = () => supabase.auth.signOut();
@@ -153,7 +157,7 @@ async function showHub() {
 
   if (!me.data) {
     card(
-      `<p>Profil indisponibil: ${esc(me.error?.message ?? "niciun rand pentru acest user")}</p><button id="retry" class="btn primary">Reincearca</button><button id="out" class="btn">Logout</button>`,
+      `<p>Profile unavailable: ${esc(me.error?.message ?? "no row for this user")}</p><button id="retry" class="btn primary">Retry</button><button id="out" class="btn">Logout</button>`,
     );
     $("retry").onclick = () => showHub();
     $("out").onclick = () => supabase.auth.signOut();
@@ -176,11 +180,11 @@ async function showHub() {
         showHub();
         if (!failed) {
           // la eroare de retea ecranul de recuperare arata deja mesajul
-          const won = /^Extractie/.test(n);
+          const won = /^Extraction/.test(n);
           void infoBox({
-            title: won ? "Extractie reusita" : "Raid incheiat",
+            title: won ? "Extraction successful" : "Raid over",
             text: n,
-            ok: "Inapoi in baza",
+            ok: "Back to base",
             tone: won ? "good" : "bad",
           });
           note = "";
@@ -193,9 +197,9 @@ async function showHub() {
   // Raid blocat: serverul inca te considera in raid, dar iesirea a esuat. Poti reintra sau abandona.
   if (raidId && raidBad) {
     card(`<div class="brand">URBAN<span>HEIST</span></div>
-      <p>Esti inca inregistrat intr-un raid. ${esc(note)}</p>
-      <button id="again" class="btn primary">Reintra in raid</button>
-      <button id="leave" class="btn">Abandoneaza raidul (pierzi itemele aduse)</button>
+      <p>You are still registered in a raid. ${esc(note)}</p>
+      <button id="again" class="btn primary">Rejoin raid</button>
+      <button id="leave" class="btn">Abandon raid (you lose the items you brought)</button>
       <button id="out" class="btn ghost">Logout</button>
       <p id="msg" class="note"></p>`);
     $("again").onclick = () => {
@@ -206,20 +210,20 @@ async function showHub() {
     $("leave").onclick = async () => {
       if (
         !(await confirmBox({
-          title: "Abandonezi raidul?",
-          text: "Pierzi itemele aduse la risc.",
-          ok: "Abandoneaza",
-          cancel: "Inapoi",
+          title: "Abandon the raid?",
+          text: "You lose the items you brought into the raid.",
+          ok: "Abandon",
+          cancel: "Back",
           danger: true,
         }))
       )
         return;
-      msg("Se iese din raid...");
+      msg("Leaving the raid...");
       const r = await rpc("die_in_raid", { p_raid_id: raidId }, 5);
       if (r || /not in raid/i.test(lastErr)) {
         raidBad = false;
         clearLoadout(uid!);
-        note = "Ai parasit raidul.";
+        note = "You left the raid.";
         showHub();
       }
     };
@@ -228,7 +232,7 @@ async function showHub() {
 
   if (!defsQ.data) {
     card(
-      `<p>Nu pot incarca itemele: ${esc(defsQ.error?.message ?? "")}</p><button id="retry" class="btn primary">Reincearca</button><button id="out" class="btn">Logout</button>`,
+      `<p>Cannot load items: ${esc(defsQ.error?.message ?? "")}</p><button id="retry" class="btn primary">Retry</button><button id="out" class="btn">Logout</button>`,
     );
     $("retry").onclick = () => showHub();
     $("out").onclick = () => supabase.auth.signOut();
@@ -262,7 +266,6 @@ async function showHub() {
     qty: r.quantity,
     x: 0,
     y: 0,
-    r: false,
   }));
   distribute(
     defs,
@@ -279,10 +282,10 @@ async function showHub() {
 
   // Itemele care nu au mai incaput in grila stau sub ea (gridul nu creste): avertizam o data
   const over = stash.items.filter(
-    (i) => i.y + dims(defs.get(i.type)!, i.r)[1] > stash.cap!,
+    (i) => i.y + dims(defs.get(i.type)!)[1] > stash.cap!,
   ).length;
   if (over)
-    note += `${note ? " " : ""}${over} ${over === 1 ? "item nu a incaput" : "iteme nu au incaput"} in stash (sunt sub grila): muta-le in inventar sau vinde-le (V).`;
+    note += `${note ? " " : ""}${over} ${over === 1 ? "item did" : "items did"} not fit in the stash (below the grid): move them to your inventory or sell them (V).`;
 
   const loadout = () => [
     ...B.bag.items,
@@ -297,40 +300,40 @@ async function showHub() {
       <div class="brand">URBAN<span>HEIST</span></div>
       <div class="stats">
         <div class="chip"><small>OPERATOR</small><b>${esc(p.username)}</b></div>
-        <div class="chip"><small>NIVEL</small><b>${p.level}</b></div>
+        <div class="chip"><small>LEVEL</small><b>${p.level}</b></div>
         <div class="chip"><small>XP</small><b>${p.xp}</b></div>
-        <div class="chip money"><small>BANI</small><b>$${p.money}</b></div>
+        <div class="chip money"><small>MONEY</small><b>$${p.money}</b></div>
       </div>
       <button id="out" class="btn ghost">Logout</button>
     </header>
     <main class="card">
       <div class="card-h">
-        <h3>Pregatire raid</h3>
-        <span class="hint">Ce pui in <b>Inventar</b> sau pe <b>Echipament</b> iei la risc in raid; un <b>rucsac</b> echipat mareste inventarul (nu uita <b>gloantele</b> pentru arma ta). <kbd>Clic dreapta</kbd> echipeaza · <kbd>R</kbd> roteste · <kbd>V</kbd> peste un item din stash il vinde</span>
+        <h3>Raid Prep</h3>
+        <span class="hint">Whatever you put in <b>Inventory</b> or on <b>Equipment</b> is at risk in the raid; an equipped <b>backpack</b> enlarges the inventory (don't forget <b>ammo</b> for your weapon). <kbd>Right-click</kbd> equips · <kbd>V</kbd> over a stash item sells it</span>
       </div>
       <div class="tools">
-        <label>Sorteaza
+        <label>Sort by
           <select id="sortsel">
-            <option value="cat">Categorie</option>
-            <option value="rar">Raritate</option>
-            <option value="val">Valoare</option>
-            <option value="name">Nume</option>
+            <option value="cat">Category</option>
+            <option value="rar">Rarity</option>
+            <option value="val">Value</option>
+            <option value="name">Name</option>
           </select>
         </label>
-        <button id="sortgo" class="btn">Sorteaza stash</button>
+        <button id="sortgo" class="btn">Sort stash</button>
         <span class="sep"></span>
-        <button id="selmode" class="btn">Selectie: OFF</button>
-        <button id="selall" class="btn ghost">Tot stash-ul</button>
-        <button id="selclr" class="btn ghost">Deselecteaza</button>
-        <span class="th"><kbd>Ctrl</kbd>+click selecteaza un item</span>
-        <button id="sellsel" class="btn danger" disabled>Vinde selectia</button>
+        <button id="selmode" class="btn">Select: OFF</button>
+        <button id="selall" class="btn ghost">Whole stash</button>
+        <button id="selclr" class="btn ghost">Deselect</button>
+        <span class="th"><kbd>Ctrl</kbd>+click selects an item</span>
+        <button id="sellsel" class="btn danger" disabled>Sell selection</button>
       </div>
       <div id="inv"></div>
     </main>
     <footer class="bar">
-      <button id="up" class="btn"${maxed || p.money < cost ? " disabled" : ""}>${maxed ? "Stash la maxim" : `Upgrade stash (+${STASH_STEP} sloturi, $${cost})`}</button>
+      <button id="up" class="btn"${maxed || p.money < cost ? " disabled" : ""}>${maxed ? "Stash maxed" : `Upgrade stash (+${STASH_STEP} slots, $${cost})`}</button>
       <p id="msg" class="note">${esc(note)}</p>
-      <button id="go" class="btn primary big">INTRA PE SERVER</button>
+      <button id="go" class="btn primary big">ENTER SERVER</button>
     </footer>
   </div>`;
   note = "";
@@ -347,15 +350,15 @@ async function showHub() {
   const sel = new Set<string>();
   let selMode = false;
   const stashSel = () => stash.items.filter((i) => sel.has(i.id));
-  const worth = (it: Item) => (defs.get(it.type)?.base_value ?? 0) * it.qty;
+  const worth = (it: Item) => sellPrice(defs.get(it.type) ?? {}, it.qty);
   const refreshTools = () => {
     const list = stashSel();
     const btn = $("sellsel") as HTMLButtonElement;
     btn.disabled = !list.length;
     btn.textContent = list.length
-      ? `Vinde ${list.length} ($${list.reduce((t, i) => t + worth(i), 0)})`
-      : "Vinde selectia";
-    $("selmode").textContent = `Selectie: ${selMode ? "ON" : "OFF"}`;
+      ? `Sell ${list.length} ($${list.reduce((t, i) => t + worth(i), 0)})`
+      : "Sell selection";
+    $("selmode").textContent = `Select: ${selMode ? "ON" : "OFF"}`;
     $("selmode").classList.toggle("on", selMode);
     $("inv").classList.toggle("selmode", selMode);
   };
@@ -393,7 +396,7 @@ async function showHub() {
           )
         )
           save();
-        else msg("Nu se poate echipa / nu incape");
+        else msg("Cannot equip / no room");
       },
     },
   );
@@ -407,14 +410,14 @@ async function showHub() {
   const onKey = async (e: KeyboardEvent) => {
     if (e.key.toLowerCase() !== "v" || !hover) return;
     const it = stash.items.find((i) => i.id === hover);
-    if (!it) return msg("Poti vinde doar din stash");
+    if (!it) return msg("You can only sell from the stash");
     const def = defs.get(it.type)!;
     if (
       !(await confirmBox({
-        title: `Vinzi ${def.name}?`,
-        text: `${def.name} x${it.qty} se vinde pentru $${(def.base_value ?? 0) * it.qty}. Nu se poate anula.`,
-        ok: "Vinde",
-        cancel: "Pastreaza",
+        title: `Sell ${def.name}?`,
+        text: `${def.name} x${it.qty} sells for $${sellPrice(def, it.qty)}. This cannot be undone.`,
+        ok: "Sell",
+        cancel: "Keep",
         danger: true,
       }))
     )
@@ -422,7 +425,7 @@ async function showHub() {
     if (await rpc("sell_item", { p_item_id: +it.id, p_qty: it.qty })) {
       stash.items = stash.items.filter((i) => i !== it);
       save();
-      done("Vandut.");
+      done("Sold.");
     }
   };
   window.addEventListener("keydown", onKey);
@@ -435,12 +438,11 @@ async function showHub() {
   const putAt = (it: Item, minY: number) => {
     for (let y = minY; y < rows; y++)
       for (let x = 0; x < stash.w; x++)
-        for (const r of [false, true])
-          if (fits(defs, stash, it, x, y, r)) {
-            Object.assign(it, { x, y, r });
-            stash.items.push(it);
-            return true;
-          }
+        if (fits(defs, stash, it, x, y)) {
+          Object.assign(it, { x, y });
+          stash.items.push(it);
+          return true;
+        }
     return false;
   };
   const sortStash = (mode: string) => {
@@ -464,11 +466,11 @@ async function showHub() {
       if (g !== null && group(it) !== g) minY = bottom;
       g = group(it);
       if (!putAt(it, minY) && !putAt(it, 0)) placeOverflow(defs, stash, it);
-      bottom = Math.max(bottom, it.y + dims(d(it), it.r)[1]);
+      bottom = Math.max(bottom, it.y + dims(d(it))[1]);
     }
     save();
     inv.render();
-    msg("Stash sortat.");
+    msg("Stash sorted.");
   };
   $("sortgo").onclick = () => sortStash(($("sortsel") as HTMLSelectElement).value);
 
@@ -495,10 +497,10 @@ async function showHub() {
     const rare = list.filter((i) => ["epic", "legendary"].includes(defs.get(i.type)!.rarity)).length;
     if (
       !(await confirmBox({
-        title: `Vinzi ${list.length} iteme?`,
-        text: `Primesti $${total}. Nu se poate anula.${rare ? ` Atentie: ${rare} sunt epice / legendare.` : ""}`,
-        ok: "Vinde tot",
-        cancel: "Pastreaza",
+        title: `Sell ${list.length} items?`,
+        text: `You get $${total}. This cannot be undone.${rare ? ` Warning: ${rare} are epic / legendary.` : ""}`,
+        ok: "Sell all",
+        cancel: "Keep",
         danger: true,
       }))
     )
@@ -506,21 +508,21 @@ async function showHub() {
     ($("sellsel") as HTMLButtonElement).disabled = true;
     let n = 0, got = 0;
     for (const it of list) {
-      msg(`Vand ${n + 1}/${list.length}...`);
+      msg(`Selling ${n + 1}/${list.length}...`);
       if (!(await rpc("sell_item", { p_item_id: +it.id, p_qty: it.qty }))) break;
       n++;
       got += worth(it);
     }
-    done(n === list.length ? `Vandute ${n} iteme, +$${got}.` : `Vandute ${n} din ${list.length} (eroare: ${lastErr}).`);
+    done(n === list.length ? `Sold ${n} items, +$${got}.` : `Sold ${n} of ${list.length} (error: ${lastErr}).`);
   };
   refreshTools();
 
   $("up").onclick = async () => {
-    if (maxed) return msg(`Stash-ul e deja la maxim (${STASH_MAX}).`);
-    if (p.money < cost) return msg(`Nu ai destui bani ($${cost}).`);
+    if (maxed) return msg(`The stash is already at its maximum (${STASH_MAX}).`);
+    if (p.money < cost) return msg(`Not enough money ($${cost}).`);
     const r = await rpc("upgrade_stash");
-    if (r) done(`Stash marit (+${STASH_STEP}), -$${cost}.`);
-    else if (/not enough money/i.test(lastErr)) msg(`Nu ai destui bani ($${cost}).`);
+    if (r) done(`Stash expanded (+${STASH_STEP}), -$${cost}.`);
+    else if (/not enough money/i.test(lastErr)) msg(`Not enough money ($${cost}).`);
   };
   $("go").onclick = async () => {
     const btn = $("go") as HTMLButtonElement;
@@ -528,9 +530,9 @@ async function showHub() {
     btn.disabled = true;
     try {
       const ids = loadout().map((i) => +i.id);
-      msg("Verific serverul...");
+      msg("Checking the server...");
       if ((await peekCount(SERVER)) >= MAX_PLAYERS)
-        return msg(`Serverul e plin (${MAX_PLAYERS}/${MAX_PLAYERS}).`);
+        return msg(`The server is full (${MAX_PLAYERS}/${MAX_PLAYERS}).`);
 
       // Fiecare jucator are propriul raid pe server (validare extractie/moarte); serverul comun e canalul Broadcast.
       const raid = await rpc("create_raid");
@@ -539,7 +541,7 @@ async function showHub() {
         return;
       if (!(await rpc("start_raid", { p_raid_id: raid.data }))) return;
       raidBad = false;
-      done("Esti in raid. Extractia e permisa dupa 60s.");
+      done("You are in the raid. Extraction opens after 60s.");
     } finally {
       btn.disabled = false;
     }

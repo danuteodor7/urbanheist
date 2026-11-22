@@ -15,7 +15,7 @@ function open(o: Opts, withCancel: boolean): Promise<boolean> {
       <h3 id="mdl-t">${esc(o.title)}</h3>
       <p>${esc(o.text)}</p>
       <div class="mdl-btns">
-        ${withCancel ? `<button class="btn ghost" data-r="0">${esc(o.cancel ?? 'Anuleaza')}</button>` : ''}
+        ${withCancel ? `<button class="btn ghost" data-r="0">${esc(o.cancel ?? 'Cancel')}</button>` : ''}
         <button class="btn ${o.danger ? 'danger' : 'primary'}" data-r="1">${esc(o.ok ?? 'OK')}</button>
       </div></div>`;
     const btns = Array.from(ov.querySelectorAll<HTMLButtonElement>('button'));
