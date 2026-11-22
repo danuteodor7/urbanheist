@@ -8,11 +8,13 @@ import {
   saveLayout,
   clearLoadout,
   distribute,
+  fits,
+  placeOverflow,
   quickEquip,
   refit,
   type Box,
 } from "./ui/inventory";
-import { registerDefs, dims, type Def, type Item } from "./game/items.ts";
+import { registerDefs, dims, spec, type Def, type Item } from "./game/items.ts";
 import { confirmBox, infoBox } from "./ui/modal.ts";
 
 type Row = {
@@ -22,7 +24,24 @@ type Row = {
   raid_id: string | null;
 };
 
-const STASH_START = 100, STASH_STEP = 50, STASH_MAX = 1500;
+const STASH_START = 100, STASH_STEP = 50, STASH_MAX = 750;
+// trebuie sa fie identic cu formula din SQL (upgrade_stash)
+const upgradeCost = (slots: number) => 1000 * ((slots - 50) / 50);
+
+// Categorii pentru sortarea / selectia din stash
+const CATS = ["Arme", "Armuri", "Rucsacuri", "Heal", "Gloante", "Chei", "Altele"];
+const RAR = ["legendary", "epic", "rare", "uncommon", "common"];
+const catOf = (d: Def): string => {
+  const s = spec(d.item_type);
+  if (s?.gun) return "Arme";
+  if (s?.slot === "head" || s?.slot === "body") return "Armuri";
+  if (s?.slot === "back") return "Rucsacuri";
+  if (s?.heal) return "Heal";
+  if (/^ammo_/.test(d.item_type)) return "Gloante";
+  if (s?.door || /key|cheie/i.test(d.item_type)) return "Chei";
+  return "Altele";
+};
+
 const app = document.getElementById("app")!;
 const $ = (id: string) => document.getElementById(id)!;
 const esc = (s: string) =>
@@ -225,16 +244,18 @@ async function showHub() {
   // Stash (grila cu dimensiune FIXA: 10 coloane, un rand la fiecare 10 sloturi, minim 8 randuri) + loadout (rucsac + 3 sloturi);
   // pozitiile se tin in localStorage. Stash-ul nu creste niciodata: itemele care nu incap raman sub grila pana le muti / vinzi.
   const B = mkBoxes();
-const slots = Math.min(STASH_MAX, Math.max(STASH_START, p.stash_slots));
-const rows = Math.ceil(slots / 10);
-const stash: Box = {
-  id: "stash",
-  title: `Stash ${safe.length}/${slots}`,
-  w: 10,
-  h: rows,
-  cap: rows,
-  items: [],
-};
+  const slots = Math.min(STASH_MAX, Math.max(STASH_START, p.stash_slots));
+  const rows = Math.ceil(slots / 10);
+  const cost = upgradeCost(slots);
+  const maxed = slots >= STASH_MAX;
+  const stash: Box = {
+    id: "stash",
+    title: `Stash ${safe.length}/${slots}`,
+    w: 10,
+    h: rows,
+    cap: rows,
+    items: [],
+  };
   const list: Item[] = safe.map((r) => ({
     id: String(r.id),
     type: r.item_type,
@@ -287,10 +308,28 @@ const stash: Box = {
         <h3>Pregatire raid</h3>
         <span class="hint">Ce pui in <b>Inventar</b> sau pe <b>Echipament</b> iei la risc in raid; un <b>rucsac</b> echipat mareste inventarul (nu uita <b>gloantele</b> pentru arma ta). <kbd>Clic dreapta</kbd> echipeaza · <kbd>R</kbd> roteste · <kbd>V</kbd> peste un item din stash il vinde</span>
       </div>
+      <div class="tools">
+        <label>Sorteaza
+          <select id="sortsel">
+            <option value="cat">Categorie</option>
+            <option value="rar">Raritate</option>
+            <option value="val">Valoare</option>
+            <option value="name">Nume</option>
+          </select>
+        </label>
+        <button id="sortgo" class="btn">Sorteaza stash</button>
+        <span class="sep"></span>
+        <button id="selmode" class="btn">Selectie: OFF</button>
+        <button id="selall" class="btn ghost">Tot stash-ul</button>
+        <button id="selclr" class="btn ghost">Deselecteaza</button>
+        <span class="th"><kbd>Ctrl</kbd>+click selecteaza un item</span>
+        <button id="sellsel" class="btn danger" disabled>Vinde selectia</button>
+      </div>
       <div id="inv"></div>
     </main>
     <footer class="bar">
-<button id="up" class="btn"${slots >= STASH_MAX ? " disabled" : ""}>Upgrade stash (+${STASH_STEP} sloturi)</button>      <p id="msg" class="note">${esc(note)}</p>
+      <button id="up" class="btn"${maxed || p.money < cost ? " disabled" : ""}>${maxed ? "Stash la maxim" : `Upgrade stash (+${STASH_STEP} sloturi, $${cost})`}</button>
+      <p id="msg" class="note">${esc(note)}</p>
       <button id="go" class="btn primary big">INTRA PE SERVER</button>
     </footer>
   </div>`;
@@ -304,6 +343,23 @@ const stash: Box = {
     showHub();
   };
 
+  // ---- selectie multipla (doar stash) ----
+  const sel = new Set<string>();
+  let selMode = false;
+  const stashSel = () => stash.items.filter((i) => sel.has(i.id));
+  const worth = (it: Item) => (defs.get(it.type)?.base_value ?? 0) * it.qty;
+  const refreshTools = () => {
+    const list = stashSel();
+    const btn = $("sellsel") as HTMLButtonElement;
+    btn.disabled = !list.length;
+    btn.textContent = list.length
+      ? `Vinde ${list.length} ($${list.reduce((t, i) => t + worth(i), 0)})`
+      : "Vinde selectia";
+    $("selmode").textContent = `Selectie: ${selMode ? "ON" : "OFF"}`;
+    $("selmode").classList.toggle("on", selMode);
+    $("inv").classList.toggle("selmode", selMode);
+  };
+
   const inv = mountInventory(
     $("inv"),
     stash,
@@ -311,7 +367,19 @@ const stash: Box = {
     B.bag,
     {
       defs,
-      onChange: save,
+      onChange: () => {
+        save();
+        refreshTools();
+      },
+      pick: (it, from, e) => {
+        if (from !== stash || !(selMode || e.ctrlKey || e.shiftKey)) return false;
+        if (sel.has(it.id)) sel.delete(it.id);
+        else sel.add(it.id);
+        refreshTools();
+        inv.render();
+        return true;
+      },
+      selected: (it) => sel.has(it.id),
       refit: () => refit(defs, B.bag, B.back),
       onDeny: (m) => msg(m),
       onUse: (it, from) => {
@@ -363,11 +431,97 @@ const stash: Box = {
     window.removeEventListener("keydown", onKey);
   };
 
-$("up").onclick = async () => {
-  if (slots >= STASH_MAX) return msg(`Stash-ul e deja la maxim (${STASH_MAX}).`);
-  const r = await rpc("upgrade_stash");
-  if (r) done(`Stash marit (+${STASH_STEP}).`);
-};
+  // ---- sortare stash ----
+  const putAt = (it: Item, minY: number) => {
+    for (let y = minY; y < rows; y++)
+      for (let x = 0; x < stash.w; x++)
+        for (const r of [false, true])
+          if (fits(defs, stash, it, x, y, r)) {
+            Object.assign(it, { x, y, r });
+            stash.items.push(it);
+            return true;
+          }
+    return false;
+  };
+  const sortStash = (mode: string) => {
+    const d = (i: Item) => defs.get(i.type)!;
+    const cat = (i: Item) => CATS.indexOf(catOf(d(i)));
+    const rar = (i: Item) => RAR.indexOf(d(i).rarity);
+    const nm = (a: Item, b: Item) => d(a).name.localeCompare(d(b).name);
+    const cmp: Record<string, (a: Item, b: Item) => number> = {
+      cat: (a, b) => cat(a) - cat(b) || rar(a) - rar(b) || nm(a, b),
+      rar: (a, b) => rar(a) - rar(b) || cat(a) - cat(b) || nm(a, b),
+      val: (a, b) => worth(b) - worth(a) || nm(a, b),
+      name: nm,
+    };
+    // cat / rar: fiecare grup nou incepe pe un rand nou
+    const group = (i: Item) => (mode === "cat" ? catOf(d(i)) : mode === "rar" ? d(i).rarity : "");
+    const items = [...stash.items].sort(cmp[mode] ?? nm);
+    stash.items = [];
+    stash.h = rows;
+    let bottom = 0, minY = 0, g: string | null = null;
+    for (const it of items) {
+      if (g !== null && group(it) !== g) minY = bottom;
+      g = group(it);
+      if (!putAt(it, minY) && !putAt(it, 0)) placeOverflow(defs, stash, it);
+      bottom = Math.max(bottom, it.y + dims(d(it), it.r)[1]);
+    }
+    save();
+    inv.render();
+    msg("Stash sortat.");
+  };
+  $("sortgo").onclick = () => sortStash(($("sortsel") as HTMLSelectElement).value);
+
+  // ---- selectie / vanzare in masa ----
+  $("selmode").onclick = () => {
+    selMode = !selMode;
+    refreshTools();
+  };
+  $("selall").onclick = () => {
+    for (const it of stash.items) sel.add(it.id);
+    selMode = true;
+    refreshTools();
+    inv.render();
+  };
+  $("selclr").onclick = () => {
+    sel.clear();
+    refreshTools();
+    inv.render();
+  };
+  $("sellsel").onclick = async () => {
+    const list = stashSel();
+    if (!list.length) return;
+    const total = list.reduce((t, i) => t + worth(i), 0);
+    const rare = list.filter((i) => ["epic", "legendary"].includes(defs.get(i.type)!.rarity)).length;
+    if (
+      !(await confirmBox({
+        title: `Vinzi ${list.length} iteme?`,
+        text: `Primesti $${total}. Nu se poate anula.${rare ? ` Atentie: ${rare} sunt epice / legendare.` : ""}`,
+        ok: "Vinde tot",
+        cancel: "Pastreaza",
+        danger: true,
+      }))
+    )
+      return;
+    ($("sellsel") as HTMLButtonElement).disabled = true;
+    let n = 0, got = 0;
+    for (const it of list) {
+      msg(`Vand ${n + 1}/${list.length}...`);
+      if (!(await rpc("sell_item", { p_item_id: +it.id, p_qty: it.qty }))) break;
+      n++;
+      got += worth(it);
+    }
+    done(n === list.length ? `Vandute ${n} iteme, +$${got}.` : `Vandute ${n} din ${list.length} (eroare: ${lastErr}).`);
+  };
+  refreshTools();
+
+  $("up").onclick = async () => {
+    if (maxed) return msg(`Stash-ul e deja la maxim (${STASH_MAX}).`);
+    if (p.money < cost) return msg(`Nu ai destui bani ($${cost}).`);
+    const r = await rpc("upgrade_stash");
+    if (r) done(`Stash marit (+${STASH_STEP}), -$${cost}.`);
+    else if (/not enough money/i.test(lastErr)) msg(`Nu ai destui bani ($${cost}).`);
+  };
   $("go").onclick = async () => {
     const btn = $("go") as HTMLButtonElement;
     if (btn.disabled) return;

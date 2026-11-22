@@ -785,7 +785,7 @@ class RaidScene extends Phaser.Scene {
   // Cu sniperul camera se muta spre mouse, ca sa vezi cat de departe ajunge raza
   private cameraLead() {
     const ptr = this.input.activePointer;
-    const k = this.gun().range && !this.driving ? 0.7 : 0;
+    const k = 0; // camera ramane pe caracter
     const tx = Phaser.Math.Clamp((ptr.x - this.scale.width / 2) * k, -320, 320),
       ty = Phaser.Math.Clamp((ptr.y - this.scale.height / 2) * k, -200, 200);
     this.lead.x += (tx - this.lead.x) * 0.08;

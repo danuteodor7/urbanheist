@@ -47,6 +47,8 @@ export const CATALOG: Record<string, Spec> = {
   sniper: { w: 6, h: 2, slot: 'weapon', gun: G.sniper },
   helmet_light: { w: 2, h: 2, slot: 'head', red: 0.1 },
   helmet_heavy: { w: 2, h: 2, slot: 'head', red: 0.2 },
+  helmet_epic: { w: 2, h: 2, slot: 'head', red: 0.28 },
+  helmet_legendary: { w: 2, h: 2, slot: 'head', red: 0.38 },
   vest_light: { w: 2, h: 3, slot: 'body', red: 0.2 },
   vest_heavy: { w: 3, h: 3, slot: 'body', red: 0.4 },
   bandage: { w: 1, h: 1, heal: { hp: 20, ms: 1500 } },

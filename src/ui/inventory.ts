@@ -12,6 +12,8 @@ export type Hooks = {
   onChange?: () => void;
   refit?: () => string | null;                                   // dupa o mutare: redimensioneaza rucsacul; mesaj de eroare = mutarea se anuleaza
   onDeny?: (msg: string) => void;
+  pick?: (it: Item, from: Box, e: PointerEvent) => boolean;      // true = click consumat (selectie multipla), fara drag
+  selected?: (it: Item) => boolean;                              // itemul e in selectie (clasa .sel)
 };
 
 export const C = 38;   // px per celula
@@ -177,7 +179,7 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     const x = b.slot ? ((b.w - w) * C) / 2 : it.x * C, y = b.slot ? ((b.h - h) * C) / 2 : it.y * C;
     const named = w * h >= 3 || (w >= 2 && h >= 1 && w * h >= 2);
     // itemele nedeblocate nu poarta clasa de raritate: sunt gri, ca sa nu dea de gol ce sunt
-    return `<div class="it ${hid ? 'hid' : `r-${def.rarity}`}" data-it="${esc(it.id)}" data-box="${b.id}" style="left:${x}px;top:${y}px;width:${w * C}px;height:${h * C}px">
+    return `<div class="it ${hid ? 'hid' : `r-${def.rarity}`}${hooks.selected?.(it) ? ' sel' : ''}" data-it="${esc(it.id)}" data-box="${b.id}" style="left:${x}px;top:${y}px;width:${w * C}px;height:${h * C}px">
       ${hid ? '<span class="q">?</span><i class="pg"></i>' : `${iconOf(def)}${named ? `<span class="nm">${esc(def.name)}</span>` : ''}${it.qty > 1 ? `<b>${it.qty}</b>` : ''}`}</div>`;
   };
   const boxHtml = (b: Box) => {
@@ -279,6 +281,7 @@ export function mountInventory(root: HTMLElement, left: Box | null, slots: Box[]
     const el = (e.target as HTMLElement).closest<HTMLElement>('.it');
     if (!el || e.button !== 0 || el.classList.contains('hid')) return;
     const { from, it } = find(el);
+    if (hooks.pick?.(it, from, e)) { e.preventDefault(); return; }
     const rect = el.getBoundingClientRect();
     const tmp = document.createElement('div');
     tmp.innerHTML = itemHtml(from, it);

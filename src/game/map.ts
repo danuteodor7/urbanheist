@@ -1,7 +1,7 @@
 export const TILE = 32;
 export const W = 120;
 export const H = 80;
-export const RESET_MS = 60 * 1000;   // loot-ul se reseteaza la fiecare minut
+export const RESET_MS = 5 * 60 * 1000;   // loot-ul se reseteaza la fiecare minut
 export const epochNow = () => Math.floor(Date.now() / RESET_MS);   // shortcut: ceasul clientului, abaterea de cateva secunde e tolerata
 
 export type Zone = 'green' | 'yellow' | 'red';
@@ -44,13 +44,13 @@ export function zoneAt(tx: number, ty: number): Zone {
 }
 
 const WEIGHTS: Record<Zone, [string, number][]> = {
-  green: [['common', 70], ['uncommon', 30]],
-  yellow: [['uncommon', 25], ['rare', 60], ['epic', 15]],
-  red: [['rare', 20], ['epic', 55], ['legendary', 25]],
+  green: [['common', 82], ['uncommon', 17], ['rare', 1]],
+  yellow: [['common', 40], ['uncommon', 35], ['rare', 20], ['epic', 5]],
+  red: [['uncommon', 25], ['rare', 50], ['epic', 22], ['legendary', 3]],
 };
 
 // Ce fel de loc apare intr-o celula, dupa zona
-const VIP: [string, number][] = [['rare', 40], ['epic', 45], ['legendary', 15]];
+const VIP: [string, number][] = [['rare', 62], ['epic', 34], ['legendary', 4]];
 
 const CELLS: Record<Zone, [string, number][]> = {
   green: [['house', 24], ['park', 10], ['parking', 8], ['plaza', 6], ['yard', 12], ['shop', 10], ['gas', 8], ['clinic', 8], ['lake', 8], ['market', 6]],
@@ -93,17 +93,31 @@ export function rngFrom(seed: string) {
 const qtyOf = (rng: () => number, d: ItemDef) =>
   d.item_type.startsWith('ammo_') ? 8 + Math.floor(rng() * 23) : d.stackable ? 1 + Math.floor(rng() * 3) : 1;
 
+// Chei: NU mai cad ca iteme normale, ci au o sansa proprie (per item rulat dintr-un container)
+const isKey = (t: string) => /key|cheie/.test(t);
+const keyKind = (t: string): 'bank' | 'warehouse' | 'house' =>
+  /bank|banca/.test(t) ? 'bank' : /warehouse|depozit|storage/.test(t) ? 'warehouse' : 'house';
+const KEY_CHANCE = { house: 0.015, warehouse: 0.006, bank: 0.0015 };   // bank = doar in containere VIP
+
 export function rollItems(rng: () => number, zone: Zone, defs: ItemDef[], vip = false, tag?: string): Loot[] {
   const int = (n: number) => Math.floor(rng() * n);
-  const tagPool = tag && TAGS[tag] ? defs.filter((d) => TAGS[tag].test(d.item_type.toLowerCase())) : [];
+  const keys = defs.filter((d) => isKey(d.item_type.toLowerCase()));
+  const normal = defs.filter((d) => !isKey(d.item_type.toLowerCase()));
+  const tagPool = tag && TAGS[tag] ? normal.filter((d) => TAGS[tag].test(d.item_type.toLowerCase())) : [];
   return Array.from({ length: 1 + int(3) + (vip ? 1 : 0) }, () => {
+    for (const k of keys) {
+      const kind = keyKind(k.item_type.toLowerCase());
+      if (kind === 'bank' && !vip) continue;
+      if (rng() < KEY_CHANCE[kind]) return { item_type: k.item_type, quantity: 1 };
+    }
     if (tagPool.length && rng() < 0.5) {
       const def = tagPool[int(tagPool.length)];
       return { item_type: def.item_type, quantity: qtyOf(rng, def) };
     }
     const rarity = pick(rng(), vip ? VIP : WEIGHTS[zone]);
-    const pool = defs.filter((d) => d.rarity === rarity);
-    const def = pool[int(pool.length)];
+    const pool = normal.filter((d) => d.rarity === rarity);
+    const safe = pool.length ? pool : normal.filter((d) => d.rarity !== 'legendary');
+    const def = safe[int(safe.length)];
     return { item_type: def.item_type, quantity: qtyOf(rng, def) };
   });
 }
